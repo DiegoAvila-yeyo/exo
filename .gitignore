@@ -1,0 +1,9 @@
+# compiled binary
+/exo
+
+# go
+*.test
+*.out
+
+# OS
+.DS_Store

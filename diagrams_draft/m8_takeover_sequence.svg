@@ -1,0 +1,93 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1600 980" width="1600" height="980" role="img" aria-labelledby="title desc">
+  <title id="title">M8 takeover sequence</title>
+  <desc id="desc">Draft sequence diagram for the case where the human takes terminal control in the browser during an active agent turn, causing the next agent terminal write to fail with ownership lost.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#fbf7ef"/>
+      <stop offset="100%" stop-color="#eef7fb"/>
+    </linearGradient>
+    <style>
+      .title { font: 700 40px Georgia, serif; fill: #1e1b18; }
+      .subtitle { font: 400 20px Georgia, serif; fill: #5e5348; }
+      .actor { font: 700 20px Georgia, serif; fill: #1e1b18; }
+      .body { font: 400 16px Georgia, serif; fill: #342d27; }
+      .note { font: 400 15px Georgia, serif; fill: #5e5348; }
+    </style>
+    <marker id="arrow" markerWidth="14" markerHeight="14" refX="10" refY="7" orient="auto">
+      <path d="M0,0 L14,7 L0,14 z" fill="#5e5348"/>
+    </marker>
+    <marker id="arrowBlue" markerWidth="14" markerHeight="14" refX="10" refY="7" orient="auto">
+      <path d="M0,0 L14,7 L0,14 z" fill="#245f84"/>
+    </marker>
+    <marker id="arrowRed" markerWidth="14" markerHeight="14" refX="10" refY="7" orient="auto">
+      <path d="M0,0 L14,7 L0,14 z" fill="#8d3922"/>
+    </marker>
+  </defs>
+  <rect width="1600" height="980" fill="url(#bg)"/>
+  <text x="70" y="80" class="title">Human Takeover Mid-Turn</text>
+  <text x="70" y="114" class="subtitle">The agent keeps its old lease; the next terminal write fails instead of silently crossing the human boundary.</text>
+
+  <g>
+    <text x="90" y="180" class="actor">Browser UI</text>
+    <text x="330" y="180" class="actor">termserver WS</text>
+    <text x="610" y="180" class="actor">ptyactor.Session</text>
+    <text x="930" y="180" class="actor">adapter</text>
+    <text x="1180" y="180" class="actor">agent turn</text>
+    <text x="1410" y="180" class="actor">chat SSE</text>
+
+    <line x1="140" y1="200" x2="140" y2="890" stroke="#8e7f72" stroke-width="3" stroke-dasharray="10 10"/>
+    <line x1="400" y1="200" x2="400" y2="890" stroke="#8e7f72" stroke-width="3" stroke-dasharray="10 10"/>
+    <line x1="700" y1="200" x2="700" y2="890" stroke="#8e7f72" stroke-width="3" stroke-dasharray="10 10"/>
+    <line x1="1010" y1="200" x2="1010" y2="890" stroke="#8e7f72" stroke-width="3" stroke-dasharray="10 10"/>
+    <line x1="1260" y1="200" x2="1260" y2="890" stroke="#8e7f72" stroke-width="3" stroke-dasharray="10 10"/>
+    <line x1="1470" y1="200" x2="1470" y2="890" stroke="#8e7f72" stroke-width="3" stroke-dasharray="10 10"/>
+  </g>
+
+  <rect x="1140" y="224" width="240" height="82" rx="18" ry="18" fill="#d7dfeb" stroke="#8e7f72" stroke-width="2"/>
+  <text x="1160" y="258" class="body">Agent already holds</text>
+  <text x="1160" y="284" class="body">lease `{owner: agent, epoch: 7}`</text>
+
+  <line x1="140" y1="350" x2="400" y2="350" stroke="#8d3922" stroke-width="4" marker-end="url(#arrowRed)"/>
+  <text x="160" y="334" class="body">1. click Take control</text>
+
+  <line x1="400" y1="390" x2="700" y2="390" stroke="#8d3922" stroke-width="4" marker-end="url(#arrowRed)"/>
+  <text x="446" y="374" class="body">2. `Takeover(&quot;human&quot;)`</text>
+
+  <rect x="612" y="414" width="176" height="78" rx="18" ry="18" fill="#f0d7c4" stroke="#8e7f72" stroke-width="2"/>
+  <text x="630" y="446" class="body">owner = human</text>
+  <text x="630" y="472" class="body">epoch = 8</text>
+
+  <line x1="700" y1="530" x2="400" y2="530" stroke="#245f84" stroke-width="4" marker-end="url(#arrowBlue)"/>
+  <text x="424" y="514" class="body">3. lease update</text>
+
+  <line x1="400" y1="566" x2="140" y2="566" stroke="#245f84" stroke-width="4" marker-end="url(#arrowBlue)"/>
+  <text x="172" y="550" class="body">4. banner: You have control</text>
+
+  <line x1="400" y1="602" x2="140" y2="602" stroke="#245f84" stroke-width="4" marker-end="url(#arrowBlue)"/>
+  <text x="172" y="586" class="body">5. old terminal subscriber closes, WS resubscribes</text>
+
+  <line x1="1260" y1="660" x2="1010" y2="660" stroke="#5e5348" stroke-width="4" marker-end="url(#arrow)"/>
+  <text x="1060" y="644" class="body">6. terminal_write</text>
+
+  <line x1="1010" y1="696" x2="700" y2="696" stroke="#5e5348" stroke-width="4" marker-end="url(#arrow)"/>
+  <text x="756" y="680" class="body">7. `WriteWithLease(agent epoch 7)`</text>
+
+  <line x1="700" y1="734" x2="1010" y2="734" stroke="#8d3922" stroke-width="4" marker-end="url(#arrowRed)"/>
+  <text x="788" y="718" class="body">8. `ErrOwnershipLost`</text>
+
+  <line x1="1010" y1="770" x2="1260" y2="770" stroke="#8d3922" stroke-width="4" marker-end="url(#arrowRed)"/>
+  <text x="1068" y="754" class="body">9. tool error result</text>
+
+  <line x1="1260" y1="806" x2="1470" y2="806" stroke="#245f84" stroke-width="4" marker-end="url(#arrowBlue)"/>
+  <text x="1292" y="790" class="body">10. agent reports blocked write</text>
+
+  <rect x="1320" y="832" width="238" height="74" rx="18" ry="18" fill="#d7dfeb" stroke="#8e7f72" stroke-width="2"/>
+  <text x="1340" y="862" class="body">Chat stream stays alive.</text>
+  <text x="1340" y="888" class="body">Turn continues or stops by policy.</text>
+
+  <rect x="72" y="832" width="288" height="74" rx="18" ry="18" fill="#d7dfeb" stroke="#8e7f72" stroke-width="2"/>
+  <text x="94" y="862" class="body">UI remains human-owned.</text>
+  <text x="94" y="888" class="body">No auto-giveback on agent retry.</text>
+
+  <text x="70" y="944" class="note">Key invariant: the adapter never calls bare `Session.Write()`. It holds the agent's old lease, so takeover is enforced by stale epoch instead of being silently bypassed.</text>
+</svg>

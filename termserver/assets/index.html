@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="{{.TokenMetaName}}" content="{{.Token}}">
+  <meta name="{{.CSRFMetaName}}" content="{{.CSRFToken}}">
+  <title>Exo Terminal</title>
+  <link rel="stylesheet" href="/assets/vendor/xterm/xterm.css">
+  <link rel="stylesheet" href="/assets/app.css">
+</head>
+<body data-app="exo-terminal">
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="sidebar-topbar">
+        <button class="sidebar-icon-button" type="button" aria-label="Search">
+          <span aria-hidden="true">⌕</span>
+        </button>
+        <button class="sidebar-icon-button" type="button" aria-label="Toggle sidebar">
+          <span aria-hidden="true">☰</span>
+        </button>
+      </div>
+
+      <div class="brand brand--compact">
+        <p class="eyebrow">Exo</p>
+        <h1>exo</h1>
+      </div>
+
+      <button id="new-chat-button" class="new-chat-button" type="button">
+        <span aria-hidden="true">✎</span>
+        <span>New chat</span>
+      </button>
+
+      <nav class="sidebar-nav" aria-label="Primary">
+        <button class="sidebar-nav-item" type="button">
+          <span aria-hidden="true">◫</span>
+          <span>Library</span>
+        </button>
+        <button class="sidebar-nav-item" type="button">
+          <span aria-hidden="true">⌘</span>
+          <span>Projects</span>
+        </button>
+        <button class="sidebar-nav-item" type="button">
+          <span aria-hidden="true">⟲</span>
+          <span>Automations</span>
+        </button>
+      </nav>
+
+      <section class="sidebar-section">
+        <div class="sidebar-section-header">
+          <span>Pinned</span>
+        </div>
+        <p class="sidebar-placeholder">Pinned chats will appear here later.</p>
+      </section>
+
+      <section class="sidebar-section">
+        <div class="sidebar-section-header">
+          <span>Recent</span>
+        </div>
+        <p class="sidebar-placeholder">Recent chats will appear here later.</p>
+      </section>
+
+      <div class="sidebar-account">
+        <div class="sidebar-avatar" aria-hidden="true">E</div>
+        <div>
+          <p class="sidebar-account-label">Local agent</p>
+          <p class="sidebar-account-subtle">Workspace shell</p>
+        </div>
+      </div>
+
+      <div class="legacy-ui" hidden>
+        <div class="brand">
+          <p class="eyebrow">Exo</p>
+          <h1>Terminal Sessions</h1>
+          <p class="muted">Switch sessions, create shells, and take control when the agent is driving.</p>
+        </div>
+
+        <section class="panel">
+          <div class="panel-header">
+            <h2>Sessions</h2>
+            <button id="refresh-sessions" class="ghost-button" type="button">Refresh</button>
+          </div>
+          <div id="session-list" class="session-list" aria-live="polite"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-header">
+            <h2>New Session</h2>
+          </div>
+          <form id="create-session-form" class="session-form">
+            <label>
+              <span>Working directory</span>
+              <input id="workdir-input" name="workdir" type="text" placeholder="/path/to/project" autocomplete="off" required>
+            </label>
+            <label>
+              <span>Name</span>
+              <input id="name-input" name="name" type="text" placeholder="Optional label" autocomplete="off">
+            </label>
+            <button id="create-session-button" class="primary-button" type="submit">Create session</button>
+          </form>
+        </section>
+      </div>
+    </aside>
+
+    <main class="workspace">
+      <div class="workspace-shell">
+        <section id="chat-panel" class="chat-panel chat-panel--empty">
+          <div class="chat-status-row">
+            <p class="chat-shell-label">Exo Agent</p>
+            <span id="chat-status-indicator" class="status-pill" data-state="idle">Idle</span>
+          </div>
+
+          <div class="chat-shell">
+            <div class="chat-empty-state">
+              <div class="chat-empty-copy">
+                <p class="chat-kicker">Exo Agent</p>
+                <h2>What can I help you do?</h2>
+                <p>Ask me to inspect code, drive a terminal, search connected tools, or create files in your project.</p>
+              </div>
+
+              <form id="chat-form" class="chat-form">
+                <label class="chat-input-wrap" for="chat-input">
+                  <span class="sr-only">Chat message</span>
+                  <input id="chat-input" name="message" type="text" placeholder="Ask the agent to inspect, run, or explain something" autocomplete="off" required>
+                </label>
+                <button id="chat-submit-button" class="primary-button" type="submit">Send</button>
+              </form>
+
+              <div class="chat-suggestions" aria-label="Suggested prompts">
+                <button class="suggestion-chip" type="button" data-prompt="Open a terminal session for this project and run pwd.">🖥️ Open a terminal and run a command</button>
+                <button class="suggestion-chip" type="button" data-prompt="Search my GitHub repositories and list my open pull requests.">🔎 Search my GitHub repositories</button>
+                <button class="suggestion-chip" type="button" data-prompt="Show my Jira tickets and summarize what needs attention first.">🎫 Show my Jira tickets</button>
+                <button class="suggestion-chip" type="button" data-prompt="Create a file named notes.txt in this project and add a short summary of what you find.">📁 Create a file in this project</button>
+              </div>
+            </div>
+
+            <div id="chat-log" class="chat-log" aria-live="polite"></div>
+          </div>
+
+          <div id="chat-feedback" class="chat-feedback" hidden></div>
+
+          <div id="approval-banner" class="approval-banner" hidden>
+            <p id="approval-title" class="approval-title">Approval required</p>
+            <p id="approval-session" class="approval-session" hidden></p>
+            <p id="approval-prompt" class="approval-prompt"></p>
+            <pre id="approval-detail" class="approval-detail" hidden></pre>
+            <div class="approval-actions">
+              <button id="approve-button" class="primary-button" type="button">Approve</button>
+              <button id="deny-button" class="ghost-button" type="button">Deny</button>
+            </div>
+          </div>
+        </section>
+
+        <div class="legacy-ui" hidden>
+          <section class="workspace-topbar">
+            <div>
+              <p class="eyebrow">Connection</p>
+              <div class="status-row">
+                <span id="connection-indicator" class="status-pill" data-state="disconnected">Disconnected</span>
+                <span id="owner-indicator" class="owner-pill">No session selected</span>
+              </div>
+            </div>
+            <div class="workspace-actions">
+              <button id="take-control-button" class="warning-button" type="button" hidden>Take control</button>
+              <button id="close-session-button" class="ghost-button" type="button" disabled>Close session</button>
+            </div>
+          </section>
+
+          <section class="terminal-card">
+            <div id="banner" class="banner" hidden></div>
+            <div id="terminal-wrapper" class="terminal-wrapper">
+              <div id="terminal" class="terminal-surface" aria-label="Terminal output"></div>
+              <div id="terminal-overlay" class="terminal-overlay" hidden>
+                <div class="overlay-card">
+                  <p id="overlay-title" class="overlay-title">No session selected</p>
+                  <p id="overlay-copy" class="overlay-copy">Create or select a session to begin.</p>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <script src="/assets/vendor/xterm/xterm.js"></script>
+  <script src="/assets/vendor/xterm-addon-fit/addon-fit.js"></script>
+  <script src="/assets/app.js"></script>
+</body>
+</html>
