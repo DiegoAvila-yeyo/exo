@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/yeyoos/nucleo-base/shared/api"
 )
 
 func TestChatPostReturns409WhenTurnBusy(t *testing.T) {
@@ -19,10 +21,10 @@ func TestChatPostReturns409WhenTurnBusy(t *testing.T) {
 	blocked := make(chan struct{})
 	release := make(chan struct{})
 
-	_, server, httpServer := newTestServer(t, store, WithAgentRunner(func(_ context.Context, _ string) error {
+	_, server, httpServer := newTestServer(t, store, WithAgentRunner(func(_ context.Context, _ string, _ []api.Message, _ string, _ string, _ string) ([]api.Message, *NavigateAction, error) {
 		close(blocked)
 		<-release
-		return nil
+		return nil, nil, nil
 	}))
 	client, csrf := bootstrapClient(t, httpServer, server)
 
@@ -64,7 +66,7 @@ func TestChatStreamEmitsIdleBusyOutputApprovalDoneWithExactSchema(t *testing.T) 
 	var serverRef *Server
 	approvalRequested := make(chan struct{})
 
-	runner := func(_ context.Context, _ string) error {
+	runner := func(_ context.Context, _ string, _ []api.Message, _ string, _ string, _ string) ([]api.Message, *NavigateAction, error) {
 		_, _ = io.WriteString(serverRef.ChatOutputWriter(), "hello from runner\n")
 		close(approvalRequested)
 		if !serverRef.RequestApproval("Approve shell write?", "detail text", map[string]string{
@@ -74,7 +76,7 @@ func TestChatStreamEmitsIdleBusyOutputApprovalDoneWithExactSchema(t *testing.T) 
 		}) {
 			t.Errorf("approval callback returned false, want true")
 		}
-		return nil
+		return nil, nil, nil
 	}
 
 	_, server, httpServer := newTestServer(t, store, WithAgentRunner(runner))
@@ -138,11 +140,11 @@ func TestChatStreamStripsANSIFromOutputEvents(t *testing.T) {
 	blocked := make(chan struct{})
 	release := make(chan struct{})
 
-	runner := func(_ context.Context, _ string) error {
+	runner := func(_ context.Context, _ string, _ []api.Message, _ string, _ string, _ string) ([]api.Message, *NavigateAction, error) {
 		_, _ = io.WriteString(serverRef.ChatOutputWriter(), "\x1b[36mhello\x1b[0m world\n")
 		close(blocked)
 		<-release
-		return nil
+		return nil, nil, nil
 	}
 
 	_, server, httpServer := newTestServer(t, store, WithAgentRunner(runner))
@@ -222,7 +224,9 @@ func TestApprovalRoutesResolvePendingApproval(t *testing.T) {
 
 func TestChatRoutesEnforceOriginAndCSRF(t *testing.T) {
 	store := newFakeStore()
-	_, server, httpServer := newTestServer(t, store, WithAgentRunner(func(_ context.Context, _ string) error { return nil }))
+	_, server, httpServer := newTestServer(t, store, WithAgentRunner(func(_ context.Context, _ string, _ []api.Message, _ string, _ string, _ string) ([]api.Message, *NavigateAction, error) {
+		return nil, nil, nil
+	}))
 	client, csrf := bootstrapClient(t, httpServer, server)
 
 	noOriginReq := newJSONRequest(t, http.MethodPost, httpServer.URL+"/api/chat?csrf_token="+url.QueryEscape(csrf), `{"message":"hello"}`)

@@ -32,6 +32,7 @@ func TestRunIdleShutdownReleasesLease(t *testing.T) {
 	cfg := Config{
 		LockPath:        lockPath,
 		SessionStoreDir: filepath.Join(t.TempDir(), "sessions"),
+		ChatStoreDir:    filepath.Join(t.TempDir(), "chats"),
 		Port:            port,
 		SocketName:      "listener",
 		IdleTimeout:     100 * time.Millisecond,
@@ -72,6 +73,7 @@ func TestRunHoldsSingleInstanceLease(t *testing.T) {
 	cfg := Config{
 		LockPath:        lockPath,
 		SessionStoreDir: filepath.Join(t.TempDir(), "sessions"),
+		ChatStoreDir:    filepath.Join(t.TempDir(), "chats"),
 		Port:            port,
 		SocketName:      "listener",
 		IdleTimeout:     2 * time.Second,
@@ -111,6 +113,7 @@ func TestRunContextCancelStopsServerAndReleasesLease(t *testing.T) {
 	cfg := Config{
 		LockPath:        lockPath,
 		SessionStoreDir: filepath.Join(t.TempDir(), "sessions"),
+		ChatStoreDir:    filepath.Join(t.TempDir(), "chats"),
 		Port:            port,
 		SocketName:      "listener",
 		IdleTimeout:     5 * time.Second,
@@ -180,6 +183,7 @@ func TestRunReconcilesCrashedInstanceSessions(t *testing.T) {
 		result <- Run(ctx, Config{
 			LockPath:        lockPath,
 			SessionStoreDir: storeDir,
+			ChatStoreDir:    filepath.Join(t.TempDir(), "chats"),
 			Port:            port,
 			SocketName:      "listener",
 			IdleTimeout:     5 * time.Second,
@@ -336,6 +340,7 @@ func startBackendHelper(t *testing.T, port int, lockPath, storeDir, instanceID s
 		fmt.Sprintf("EXO_HELPER_PORT=%d", port),
 		"EXO_HELPER_LOCK="+lockPath,
 		"EXO_HELPER_STORE="+storeDir,
+		"EXO_HELPER_CHATS="+filepath.Join(t.TempDir(), "chats"),
 		"EXO_HELPER_INSTANCE="+instanceID,
 	)
 	if err := cmd.Start(); err != nil {
@@ -349,6 +354,7 @@ func runBackendHelperProcess() {
 	err := Run(context.Background(), Config{
 		LockPath:        os.Getenv("EXO_HELPER_LOCK"),
 		SessionStoreDir: os.Getenv("EXO_HELPER_STORE"),
+		ChatStoreDir:    os.Getenv("EXO_HELPER_CHATS"),
 		Port:            port,
 		SocketName:      "listener",
 		IdleTimeout:     time.Hour,

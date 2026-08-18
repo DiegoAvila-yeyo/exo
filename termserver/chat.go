@@ -3,15 +3,116 @@ package termserver
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
+
+	"github.com/DiegoAvila-yeyo/exo/agenthost"
+	"github.com/DiegoAvila-yeyo/exo/chatstore"
+	"github.com/yeyoos/nucleo-base/shared/api"
 )
 
-type AgentRunner func(ctx context.Context, input string) error
+// AgentRunner runs one turn against the given conversation history and
+// returns the agent's updated history afterward, so the caller can persist
+// it per chat session. history may be nil when session persistence isn't
+// configured (Server.chatStore == nil) — the runner must tolerate that.
+// projectPath, when non-empty, is the folder the session picked in the
+// composer — the runner is expected to move the agent there (and reread
+// that project's own rules) before running the turn. planningID/boardID
+// scope the turn to a Planning, optionally a specific Board within it — see
+// resolvePlanningContext for how they're validated before reaching here.
+// By the time AgentRunner sees them, exactly one of three shapes holds:
+// both empty (no Planning), planningID set with boardID empty (in a
+// Planning, no Board open — e.g. a Planning with no Boards yet), or both
+// set (in a specific Board). boardID is never set with planningID empty.
+//
+// The returned *NavigateAction (Round 3) is non-nil when a navigation tool
+// committed a destination during the turn — see NavigateAction's doc
+// comment for the committed-vs-delivered distinction. It must be checked
+// and, if non-nil, delivered to the frontend regardless of whether err is
+// also non-nil: a tool's persisted side effect (a Board/Planning actually
+// created) already happened by the time it committed, and a later,
+// unrelated failure in the rest of the turn must not make it disappear.
+type AgentRunner func(ctx context.Context, input string, history []api.Message, projectPath string, planningID string, boardID string) ([]api.Message, *NavigateAction, error)
+
+// NavigateAction mirrors agenthost.NavigateAction's shape (deliberately not
+// reused directly — termserver stays decoupled from agenthost the same way
+// it already is from every other concrete backend, via the AgentRunner
+// contract) plus the request-level identity fields a navigation tool has no
+// way to know: which browser tab asked, and which of that tab's turns this
+// was. handleChat fills ClientID/SessionID/TurnID in from the HTTP request
+// that produced this turn; the runner only ever fills the rest.
+type NavigateAction struct {
+	ClientID     string
+	SessionID    string
+	TurnID       string
+	PlanningID   string
+	PlanningName string
+	BoardID      string
+	BoardName    string
+}
+
+// resolvePlanningContext implements the atomic (planning_id, board_id)
+// state machine:
+//
+//	both omitted                  -> preserve existing session context
+//	both explicitly ""            -> clear context entirely
+//	planning_id set, board_id ""  -> "in a Planning, no Board open" —
+//	                                  valid on its own: creating a
+//	                                  Planning's first Board doesn't
+//	                                  require already being in one
+//	both non-empty                -> "in a specific Board" — verified to
+//	                                  actually belong to that planning
+//	board_id set, planning_id ""  -> invalid: a Board can't exist without
+//	                                  its Planning
+//	anything else (one nil, one   -> reject: 400, caller must leave
+//	  non-nil)                       existing session context untouched
+//
+// planningID/boardID are nil when the request body omitted the JSON key
+// entirely, and non-nil (possibly pointing at "") when the client sent it
+// explicitly — that distinction is exactly what this function exists to
+// make, since a plain string can't tell "omitted" apart from "sent empty."
+func resolvePlanningContext(store planningStore, existingPlanningID, existingBoardID string, planningID, boardID *string) (string, string, error) {
+	switch {
+	case planningID == nil && boardID == nil:
+		return existingPlanningID, existingBoardID, nil
+	case planningID == nil || boardID == nil:
+		return "", "", errors.New("planning_id and board_id must both be sent or both be omitted")
+	}
+
+	p := strings.TrimSpace(*planningID)
+	b := strings.TrimSpace(*boardID)
+	if p == "" && b == "" {
+		return "", "", nil
+	}
+	if p == "" && b != "" {
+		return "", "", errors.New("board_id without planning_id is invalid")
+	}
+	if store == nil {
+		return "", "", errors.New("planning is not configured")
+	}
+	planning, err := store.Load(p)
+	if err != nil {
+		return "", "", errors.New("planning not found")
+	}
+	if b == "" {
+		// In the Planning, no specific Board open — e.g. picking a Planning
+		// that has no Boards yet. Valid on its own so planning_create_board
+		// can bootstrap the first one without already being inside a Board.
+		return p, "", nil
+	}
+	for _, board := range planning.Boards {
+		if board.ID == b {
+			return p, b, nil
+		}
+	}
+	return "", "", errors.New("board does not belong to that planning")
+}
 
 type chatStateEvent struct {
 	Type string `json:"type"`
@@ -29,9 +130,28 @@ type chatApprovalEvent struct {
 	SessionID string `json:"session_id"`
 }
 
+// chatNavigateEvent is the wire shape of a NavigateAction, delivered over
+// SSE. client_id is what every tab's frontend filters on — the broadcaster
+// still fans this out to every connected tab (Round 3 explicitly doesn't
+// add server-side per-client routing), so a tab whose client_id doesn't
+// match must ignore it; turn_id additionally lets a tab ignore a navigate
+// event that arrives for a turn it no longer considers current (e.g. after
+// a reconnect).
+type chatNavigateEvent struct {
+	Type         string `json:"type"`
+	ClientID     string `json:"client_id"`
+	SessionID    string `json:"session_id,omitempty"`
+	TurnID       string `json:"turn_id"`
+	PlanningID   string `json:"planning_id"`
+	PlanningName string `json:"planning_name"`
+	BoardID      string `json:"board_id,omitempty"`
+	BoardName    string `json:"board_name,omitempty"`
+}
+
 type chatSubscription struct {
-	output chan string
-	done   chan struct{}
+	output   chan string
+	done     chan struct{}
+	navigate chan chatNavigateEvent
 }
 
 type chatBroadcaster struct {
@@ -75,6 +195,18 @@ func (b *chatBroadcaster) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// Snapshot returns a copy of the buffered output chunks for the turn that
+// just ran (replay is cleared at the start of every handleChat call, so this
+// is exactly that turn's chunks). Used to append the display transcript to a
+// persisted chat session once the turn completes.
+func (b *chatBroadcaster) Snapshot() []string {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	out := make([]string, len(b.replay))
+	copy(out, b.replay)
+	return out
+}
+
 func (b *chatBroadcaster) ClearReplay() {
 	b.mu.Lock()
 	b.replay = b.replay[:0]
@@ -94,15 +226,16 @@ func (b *chatBroadcaster) Replay(output chan string) {
 	}
 }
 
-func (b *chatBroadcaster) Subscribe() (chan string, chan struct{}) {
+func (b *chatBroadcaster) Subscribe() (chan string, chan struct{}, chan chatNavigateEvent) {
 	sub := &chatSubscription{
-		output: make(chan string, 1024),
-		done:   make(chan struct{}, 1),
+		output:   make(chan string, 1024),
+		done:     make(chan struct{}, 1),
+		navigate: make(chan chatNavigateEvent, 4),
 	}
 	b.mu.Lock()
 	b.subs[sub.output] = sub
 	b.mu.Unlock()
-	return sub.output, sub.done
+	return sub.output, sub.done, sub.navigate
 }
 
 func (b *chatBroadcaster) Unsubscribe(output chan string) {
@@ -117,6 +250,20 @@ func (b *chatBroadcaster) NotifyDone() {
 	for _, sub := range b.subs {
 		select {
 		case sub.done <- struct{}{}:
+		default:
+		}
+	}
+	b.mu.RUnlock()
+}
+
+// NotifyNavigate fans event out to every connected subscriber — see
+// chatNavigateEvent's doc comment for why filtering by client_id/turn_id is
+// the frontend's job this round, not the broadcaster's.
+func (b *chatBroadcaster) NotifyNavigate(event chatNavigateEvent) {
+	b.mu.RLock()
+	for _, sub := range b.subs {
+		select {
+		case sub.navigate <- event:
 		default:
 		}
 	}
@@ -187,30 +334,134 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var body struct {
-		Message string `json:"message"`
+		Message     string  `json:"message"`
+		SessionID   string  `json:"session_id,omitempty"`
+		ProjectPath string  `json:"project_path,omitempty"`
+		PlanningID  *string `json:"planning_id,omitempty"`
+		BoardID     *string `json:"board_id,omitempty"`
+		// ClientID/TurnID (Round 3) identify which browser tab and which of
+		// its submits this request is — the frontend generates both (see
+		// build_prompt_PLANNING_ROUND3.md's "Per-tab identity" section) and
+		// the server treats them as opaque correlation tokens, never
+		// inventing or reinterpreting them. Only used to address a
+		// `navigate` SSE event back to the right tab/turn; harmless if
+		// empty (an empty client_id just never matches a real tab's own).
+		ClientID string `json:"client_id,omitempty"`
+		TurnID   string `json:"turn_id,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Message == "" {
 		http.Error(w, "missing message", http.StatusBadRequest)
 		return
 	}
+
+	// Persistence is opt-in: when no chatStore is wired up (WithChatStore),
+	// behavior is exactly the pre-sessions global chat — no session_id in,
+	// none out.
+	persist := s.chatStore != nil
+
+	// Load (but do not create) an existing session first, purely to read its
+	// current Planning context for resolvePlanningContext's "both omitted"
+	// case — session creation and every other mutation waits until after
+	// context resolution succeeds, so an invalid pair never has a chance to
+	// touch anything, including via an incidental new-session side effect.
+	var session chatstore.ChatSession
+	sessionLoaded := false
+	if persist && body.SessionID != "" {
+		var err error
+		session, err = s.chatStore.Load(body.SessionID)
+		if err != nil {
+			if errors.Is(err, chatstore.ErrNotFound) {
+				http.Error(w, "chat session not found", http.StatusNotFound)
+				return
+			}
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		sessionLoaded = true
+	}
+
+	planningID, boardID, err := resolvePlanningContext(s.planning, session.PlanningID, session.BoardID, body.PlanningID, body.BoardID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if persist {
+		if !sessionLoaded {
+			var createErr error
+			session, createErr = s.chatStore.Create()
+			if createErr != nil {
+				http.Error(w, createErr.Error(), http.StatusInternalServerError)
+				return
+			}
+		}
+		session.Entries = append(session.Entries, chatstore.ChatEntry{Text: "You: " + body.Message, Kind: "system"})
+		// Only overwrite when the client actually sent one — omitting
+		// project_path on a later message keeps whatever project this
+		// session already picked, it doesn't clear it.
+		if body.ProjectPath != "" {
+			session.ProjectPath = body.ProjectPath
+		}
+		session.PlanningID = planningID
+		session.BoardID = boardID
+	}
+
 	if !s.agentMu.TryLock() {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "busy"})
 		return
 	}
 
 	s.chatBroadcaster.ClearReplay()
-	go func(message string) {
+	go func(message string, sess chatstore.ChatSession, planningID, boardID, clientID, turnID string) {
 		defer func() {
 			s.agentMu.Unlock()
 			s.chatBroadcaster.NotifyDone()
 		}()
-		if err := s.runner(context.Background(), message); err != nil {
+		// sess.ID travels on the context, not as a new AgentRunner
+		// parameter — see agenthost.ContextWithSessionID's doc comment.
+		// Chosen over widening AgentRunner's signature (and every test that
+		// constructs one) for a value that only the yeyo gate's telemetry
+		// (agenthost/gate_telemetry.go, EXO_YEYO_GATE) currently reads.
+		runCtx := agenthost.ContextWithSessionID(context.Background(), sess.ID)
+		updated, navAction, err := s.runner(runCtx, message, sess.Messages, sess.ProjectPath, planningID, boardID)
+		if err != nil {
 			_, _ = io.WriteString(s.chatBroadcaster, "error: "+err.Error()+"\n")
 		}
-	}(body.Message)
+		// Delivered on this turn's terminal state — success or error above
+		// — never gated behind it: the tool already committed this before
+		// Run returned, a later, unrelated failure must not lose it.
+		if navAction != nil {
+			s.chatBroadcaster.NotifyNavigate(chatNavigateEvent{
+				Type:         "navigate",
+				ClientID:     clientID,
+				SessionID:    sess.ID,
+				TurnID:       turnID,
+				PlanningID:   navAction.PlanningID,
+				PlanningName: navAction.PlanningName,
+				BoardID:      navAction.BoardID,
+				BoardName:    navAction.BoardName,
+			})
+		}
+		if persist {
+			sess.Messages = updated
+			for _, line := range s.chatBroadcaster.Snapshot() {
+				sess.Entries = append(sess.Entries, chatstore.ChatEntry{Text: line})
+			}
+			if sess.Title == chatstore.DefaultTitle {
+				sess.Title = deriveChatTitle(message)
+			}
+			if saveErr := s.chatStore.Save(sess); saveErr != nil {
+				fmt.Printf("termserver: failed to save chat session %q: %v\n", sess.ID, saveErr)
+			}
+		}
+	}(body.Message, session, planningID, boardID, body.ClientID, body.TurnID)
 
 	s.recordActivity()
-	writeJSON(w, http.StatusAccepted, map[string]string{"status": "accepted"})
+	resp := map[string]string{"status": "accepted"}
+	if persist {
+		resp["session_id"] = session.ID
+	}
+	writeJSON(w, http.StatusAccepted, resp)
 }
 
 func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
@@ -228,7 +479,7 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
 
-	output, done := s.chatBroadcaster.Subscribe()
+	output, done, navigate := s.chatBroadcaster.Subscribe()
 	defer s.chatBroadcaster.Unsubscribe(output)
 	s.chatBroadcaster.Replay(output)
 
@@ -266,6 +517,8 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 			s.writeSSE(w, chatOutputEvent{Type: "output", Text: text})
 		case <-done:
 			s.writeSSE(w, chatStateEvent{Type: "done"})
+		case event := <-navigate:
+			s.writeSSE(w, event)
 		case <-approvalTicker.C:
 			if seq, prompt, detail, sessionID, active := s.approval.snapshot(); active && seq != lastApprovalSeq {
 				lastApprovalSeq = seq

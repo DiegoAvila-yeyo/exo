@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/DiegoAvila-yeyo/exo/appconfig"
@@ -76,7 +77,7 @@ func TestTerminalToolsRegisteredWithAdapterBackend(t *testing.T) {
 	manager := sessions.New()
 	adapter := m8adapter.New(manager)
 
-	registry := buildToolRegistry(adapter)
+	registry := buildToolRegistry(adapter, nil, &planningContext{}, newNavigateCell(), true)
 	assertTerminalToolManager(t, registry, "terminal_open", adapter)
 	assertTerminalToolManager(t, registry, "terminal_read", adapter)
 	assertTerminalToolManager(t, registry, "terminal_write", adapter)
@@ -164,7 +165,7 @@ func TestNewChangesProcessWorkingDirectoryToConfiguredRootPath(t *testing.T) {
 	rootPath := t.TempDir()
 	t.Setenv("EXO_AGENT_ROOT_PATH", rootPath)
 
-	host, err := New(context.Background(), sessions.New())
+	host, err := New(context.Background(), sessions.New(), nil)
 	if err != nil {
 		t.Fatalf("New returned error: %v", err)
 	}
@@ -189,6 +190,160 @@ func TestNewChangesProcessWorkingDirectoryToConfiguredRootPath(t *testing.T) {
 	}
 }
 
+func TestSetRootPathChangesWorkingDirectoryAndRebuildsSystemPrompt(t *testing.T) {
+	isolateLocalMemoryService(t)
+	clearProviderEnv(t)
+	t.Setenv("OPENAI_API_KEY", "test-openai-key")
+
+	originalWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd returned error: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(originalWD); err != nil {
+			t.Fatalf("restore working directory: %v", err)
+		}
+	})
+
+	startRoot := t.TempDir()
+	t.Setenv("EXO_AGENT_ROOT_PATH", startRoot)
+
+	host, err := New(context.Background(), sessions.New(), nil)
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	originalPrompt := host.agent.System
+
+	// The project we're about to switch into has its own rules — SetRootPath
+	// must pick these up in the rebuilt system prompt.
+	projectRoot := t.TempDir()
+	agentsMD := "# Project Rules\n\nAlways run tests before committing."
+	if err := os.WriteFile(filepath.Join(projectRoot, "AGENTS.md"), []byte(agentsMD), 0o644); err != nil {
+		t.Fatalf("write AGENTS.md failed: %v", err)
+	}
+
+	if err := host.SetRootPath(projectRoot); err != nil {
+		t.Fatalf("SetRootPath returned error: %v", err)
+	}
+
+	gotWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd returned error: %v", err)
+	}
+	gotResolved, err := filepath.EvalSymlinks(gotWD)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(gotWD) failed: %v", err)
+	}
+	wantResolved, err := filepath.EvalSymlinks(projectRoot)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(projectRoot) failed: %v", err)
+	}
+	if gotResolved != wantResolved {
+		t.Fatalf("working directory = %q, want %q", gotResolved, wantResolved)
+	}
+
+	if host.agent.System == originalPrompt {
+		t.Fatal("system prompt unchanged after SetRootPath, want it rebuilt for the new project")
+	}
+	if !strings.Contains(host.agent.System, "Always run tests before committing.") {
+		t.Fatalf("system prompt = %q, want it to include the new project's AGENTS.md", host.agent.System)
+	}
+	if host.coordinator.RootPath != filepath.Clean(projectRoot) {
+		t.Fatalf("coordinator.RootPath = %q, want %q", host.coordinator.RootPath, filepath.Clean(projectRoot))
+	}
+}
+
+func TestSetRootPathEmptyPathIsCheapNoOpWhenAlreadyAtOriginalRoot(t *testing.T) {
+	isolateLocalMemoryService(t)
+	clearProviderEnv(t)
+	t.Setenv("OPENAI_API_KEY", "test-openai-key")
+
+	originalWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd returned error: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(originalWD); err != nil {
+			t.Fatalf("restore working directory: %v", err)
+		}
+	})
+
+	rootPath := t.TempDir()
+	t.Setenv("EXO_AGENT_ROOT_PATH", rootPath)
+
+	host, err := New(context.Background(), sessions.New(), nil)
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	originalPrompt := host.agent.System
+
+	// New already put the process at rootPath, so an empty-path reset here
+	// has nowhere new to go — SetRootPath should recognize that and skip
+	// the chdir + instructions re-read entirely.
+	if err := host.SetRootPath(""); err != nil {
+		t.Fatalf("SetRootPath(\"\") returned error: %v", err)
+	}
+	if host.agent.System != originalPrompt {
+		t.Fatal("system prompt changed after SetRootPath(\"\") with nothing to reset from, want no-op")
+	}
+}
+
+func TestSetRootPathEmptyPathResetsToOriginalRootAfterProjectSwitch(t *testing.T) {
+	isolateLocalMemoryService(t)
+	clearProviderEnv(t)
+	t.Setenv("OPENAI_API_KEY", "test-openai-key")
+
+	originalWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd returned error: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(originalWD); err != nil {
+			t.Fatalf("restore working directory: %v", err)
+		}
+	})
+
+	startRoot := t.TempDir()
+	t.Setenv("EXO_AGENT_ROOT_PATH", startRoot)
+
+	host, err := New(context.Background(), sessions.New(), nil)
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+
+	// Switch into a project for one turn...
+	projectRoot := t.TempDir()
+	if err := host.SetRootPath(projectRoot); err != nil {
+		t.Fatalf("SetRootPath(projectRoot) returned error: %v", err)
+	}
+
+	// ...then a later turn with no project selected must NOT leave the
+	// agent sitting in the previous project — it has to reset back to
+	// startRoot, not silently no-op.
+	if err := host.SetRootPath(""); err != nil {
+		t.Fatalf("SetRootPath(\"\") returned error: %v", err)
+	}
+
+	gotWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd returned error: %v", err)
+	}
+	gotResolved, err := filepath.EvalSymlinks(gotWD)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(gotWD) failed: %v", err)
+	}
+	wantResolved, err := filepath.EvalSymlinks(startRoot)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(startRoot) failed: %v", err)
+	}
+	if gotResolved != wantResolved {
+		t.Fatalf("working directory after SetRootPath(\"\") = %q, want reset to %q", gotResolved, wantResolved)
+	}
+	if host.coordinator.RootPath != filepath.Clean(startRoot) {
+		t.Fatalf("coordinator.RootPath = %q, want reset to %q", host.coordinator.RootPath, filepath.Clean(startRoot))
+	}
+}
+
 func TestNewSucceedsWithNoMCPConfigFile(t *testing.T) {
 	isolateLocalMemoryService(t)
 	clearProviderEnv(t)
@@ -196,7 +351,7 @@ func TestNewSucceedsWithNoMCPConfigFile(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("EXO_AGENT_ROOT_PATH", t.TempDir())
 
-	host, err := New(context.Background(), sessions.New())
+	host, err := New(context.Background(), sessions.New(), nil)
 	if err != nil {
 		t.Fatalf("New returned error: %v", err)
 	}
@@ -224,7 +379,7 @@ func TestNewFailsFastOnMalformedMCPConfig(t *testing.T) {
 		t.Fatalf("WriteFile returned error: %v", err)
 	}
 
-	_, err = New(context.Background(), sessions.New())
+	_, err = New(context.Background(), sessions.New(), nil)
 	if err == nil {
 		t.Fatal("New returned nil error, want malformed mcp config failure")
 	}
@@ -245,7 +400,7 @@ func TestNewEnablesMemoryWhenStoreOpensSuccessfully(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "test-openai-key")
 	t.Setenv("EXO_AGENT_ROOT_PATH", t.TempDir())
 
-	host, err := New(context.Background(), sessions.New())
+	host, err := New(context.Background(), sessions.New(), nil)
 	if err != nil {
 		t.Fatalf("New returned error: %v", err)
 	}
@@ -275,7 +430,7 @@ func TestNewContinuesWithMemoryDisabledWhenStoreOpenFails(t *testing.T) {
 		openMemoryStore = originalOpenMemoryStore
 	})
 
-	host, err := New(context.Background(), sessions.New())
+	host, err := New(context.Background(), sessions.New(), nil)
 	if err != nil {
 		t.Fatalf("New returned error: %v", err)
 	}
@@ -297,7 +452,7 @@ func TestHostCloseClosesMemoryStoreWithoutError(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "test-openai-key")
 	t.Setenv("EXO_AGENT_ROOT_PATH", t.TempDir())
 
-	host, err := New(context.Background(), sessions.New())
+	host, err := New(context.Background(), sessions.New(), nil)
 	if err != nil {
 		t.Fatalf("New returned error: %v", err)
 	}

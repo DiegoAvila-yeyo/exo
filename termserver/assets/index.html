@@ -12,15 +12,6 @@
 <body data-app="exo-terminal">
   <div class="shell">
     <aside class="sidebar">
-      <div class="sidebar-topbar">
-        <button class="sidebar-icon-button" type="button" aria-label="Search">
-          <span aria-hidden="true">⌕</span>
-        </button>
-        <button class="sidebar-icon-button" type="button" aria-label="Toggle sidebar">
-          <span aria-hidden="true">☰</span>
-        </button>
-      </div>
-
       <div class="brand brand--compact">
         <p class="eyebrow">Exo</p>
         <h1>exo</h1>
@@ -36,10 +27,24 @@
           <span aria-hidden="true">◫</span>
           <span>Library</span>
         </button>
-        <button class="sidebar-nav-item" type="button">
+        <button id="planning-nav-item" class="sidebar-nav-item" type="button">
+          <span aria-hidden="true">◎</span>
+          <span>Planning</span>
+        </button>
+        <button
+          id="project-section-toggle"
+          class="sidebar-nav-item"
+          type="button"
+          aria-expanded="false"
+          aria-controls="project-list"
+        >
           <span aria-hidden="true">⌘</span>
           <span>Projects</span>
+          <span class="sidebar-nav-chevron" aria-hidden="true">⌄</span>
         </button>
+        <div id="project-list" class="chat-session-list" aria-live="polite" hidden>
+          <p class="sidebar-placeholder">Loading projects…</p>
+        </div>
         <button class="sidebar-nav-item" type="button">
           <span aria-hidden="true">⟲</span>
           <span>Automations</span>
@@ -54,10 +59,19 @@
       </section>
 
       <section class="sidebar-section">
-        <div class="sidebar-section-header">
-          <span>Recent</span>
+        <button
+          id="chat-section-toggle"
+          class="sidebar-section-toggle"
+          type="button"
+          aria-expanded="true"
+          aria-controls="chat-session-list"
+        >
+          <span class="sidebar-section-header">Recent</span>
+          <span class="sidebar-section-chevron" aria-hidden="true">⌄</span>
+        </button>
+        <div id="chat-session-list" class="chat-session-list" aria-live="polite">
+          <p class="sidebar-placeholder">Your chats will appear here.</p>
         </div>
-        <p class="sidebar-placeholder">Recent chats will appear here later.</p>
       </section>
 
       <div class="sidebar-account">
@@ -103,38 +117,55 @@
     </aside>
 
     <main class="workspace">
-      <div class="workspace-shell">
+      <div class="workspace-shell" id="home-view">
         <section id="chat-panel" class="chat-panel chat-panel--empty">
           <div class="chat-status-row">
-            <p class="chat-shell-label">Exo Agent</p>
             <span id="chat-status-indicator" class="status-pill" data-state="idle">Idle</span>
           </div>
 
           <div class="chat-shell">
             <div class="chat-empty-state">
-              <div class="chat-empty-copy">
-                <p class="chat-kicker">Exo Agent</p>
-                <h2>What can I help you do?</h2>
-                <p>Ask me to inspect code, drive a terminal, search connected tools, or create files in your project.</p>
-              </div>
-
-              <form id="chat-form" class="chat-form">
-                <label class="chat-input-wrap" for="chat-input">
-                  <span class="sr-only">Chat message</span>
-                  <input id="chat-input" name="message" type="text" placeholder="Ask the agent to inspect, run, or explain something" autocomplete="off" required>
-                </label>
-                <button id="chat-submit-button" class="primary-button" type="submit">Send</button>
-              </form>
-
-              <div class="chat-suggestions" aria-label="Suggested prompts">
-                <button class="suggestion-chip" type="button" data-prompt="Open a terminal session for this project and run pwd.">🖥️ Open a terminal and run a command</button>
-                <button class="suggestion-chip" type="button" data-prompt="Search my GitHub repositories and list my open pull requests.">🔎 Search my GitHub repositories</button>
-                <button class="suggestion-chip" type="button" data-prompt="Show my Jira tickets and summarize what needs attention first.">🎫 Show my Jira tickets</button>
-                <button class="suggestion-chip" type="button" data-prompt="Create a file named notes.txt in this project and add a short summary of what you find.">📁 Create a file in this project</button>
-              </div>
+              <p class="chat-wordmark">exo</p>
             </div>
 
             <div id="chat-log" class="chat-log" aria-live="polite"></div>
+
+            <form id="chat-form" class="chat-form">
+              <label class="chat-input-wrap" for="chat-input">
+                <span class="sr-only">Chat message</span>
+                <input id="chat-input" name="message" type="text" placeholder="Ask the agent to inspect, run, or explain something" autocomplete="off" required>
+              </label>
+              <div class="chat-form-toolbar">
+                <button
+                  id="chat-power-toggle"
+                  class="power-toggle"
+                  type="button"
+                  role="switch"
+                  aria-checked="false"
+                  aria-label="Toggle"
+                >
+                  <span class="power-toggle-knob" aria-hidden="true"></span>
+                </button>
+                <button id="chat-submit-button" class="chat-send-button" type="submit" aria-label="Send">
+                  <span aria-hidden="true">↑</span>
+                </button>
+              </div>
+            </form>
+
+            <div class="chat-suggestions" aria-label="Suggested prompts">
+              <button class="suggestion-chip" type="button" data-prompt="Open a terminal session for this project and run pwd.">
+                <span aria-hidden="true">🖥️</span> Terminal
+              </button>
+              <button class="suggestion-chip" type="button" data-prompt="Search my GitHub repositories and list my open pull requests.">
+                <span aria-hidden="true">🔎</span> GitHub
+              </button>
+              <button class="suggestion-chip" type="button" data-prompt="Show my Jira tickets and summarize what needs attention first.">
+                <span aria-hidden="true">🎫</span> Jira
+              </button>
+              <button class="suggestion-chip" type="button" data-prompt="Create a file named notes.txt in this project and add a short summary of what you find.">
+                <span aria-hidden="true">📁</span> New file
+              </button>
+            </div>
           </div>
 
           <div id="chat-feedback" class="chat-feedback" hidden></div>
@@ -177,6 +208,48 @@
                 </div>
               </div>
             </div>
+          </section>
+        </div>
+      </div>
+
+      <div class="workspace-shell planning-shell" id="planning-view" hidden>
+        <div class="planning-view-inner">
+          <section id="planning-list-screen" class="planning-list-screen">
+            <div class="planning-list-header">
+              <h2>Planning</h2>
+              <button id="planning-new-button" class="ghost-button" type="button">+ New planning</button>
+            </div>
+            <div id="planning-list" class="planning-list" aria-live="polite">
+              <p class="sidebar-placeholder">Loading…</p>
+            </div>
+          </section>
+
+          <section id="planning-board-screen" class="planning-board-screen" hidden>
+            <div class="planning-board-header">
+              <button id="planning-back-button" class="ghost-button" type="button">
+                <span aria-hidden="true">←</span> Planning
+              </button>
+              <div class="planning-breadcrumb">
+                <span id="planning-breadcrumb-name"></span>
+                <span aria-hidden="true">/</span>
+                <select id="planning-board-select" aria-label="Board"></select>
+              </div>
+              <div class="planning-board-actions">
+                <button id="planning-notes-toggle" class="ghost-button" type="button" aria-expanded="false">Notes</button>
+                <button id="planning-new-board-button" class="ghost-button" type="button">+ New board</button>
+              </div>
+            </div>
+
+            <div id="planning-notes-panel" class="planning-notes-panel" hidden>
+              <div id="planning-notes-list" class="planning-notes-list" aria-live="polite"></div>
+            </div>
+
+            <div id="planning-canvas-placeholder" class="planning-canvas-placeholder">
+              <p class="planning-canvas-placeholder-title">This board is empty.</p>
+              <p class="muted">The canvas arrives in Round 2 — for now this is where the thinking happens.</p>
+            </div>
+
+            <div id="planning-chat-slot" class="planning-chat-slot"></div>
           </section>
         </div>
       </div>

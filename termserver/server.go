@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/DiegoAvila-yeyo/exo/projects"
 	"github.com/DiegoAvila-yeyo/exo/ptyactor"
 	"github.com/DiegoAvila-yeyo/exo/sessions"
 	"github.com/gorilla/websocket"
@@ -67,6 +68,10 @@ type Server struct {
 	agentMu         sync.Mutex
 	chatBroadcaster *chatBroadcaster
 	approval        pendingApproval
+	chatStore       chatSessionStore
+	projectRoot     string
+	scanProjects    projectScanner
+	planning        planningStore
 }
 
 type sessionHub struct {
@@ -99,6 +104,40 @@ func WithCreateGuard(guard func() error) Option {
 func WithAgentRunner(runner AgentRunner) Option {
 	return func(server *Server) {
 		server.runner = runner
+	}
+}
+
+// WithChatStore enables persisted, named, multi-session chat. Without it,
+// POST /api/chat and the sidebar's session list behave exactly as before —
+// a single unnamed, in-memory-only conversation.
+func WithChatStore(store chatSessionStore) Option {
+	return func(server *Server) {
+		server.chatStore = store
+	}
+}
+
+// WithProjectRoot enables GET /api/projects, scanning root live on every
+// request. Without it, the endpoint returns an empty list.
+func WithProjectRoot(root string) Option {
+	return WithProjectScanner(root, projects.Scan)
+}
+
+// WithProjectScanner is WithProjectRoot with the scan function injectable —
+// tests use this to avoid touching the real filesystem.
+func WithProjectScanner(root string, scan projectScanner) Option {
+	return func(server *Server) {
+		server.projectRoot = root
+		server.scanProjects = scan
+	}
+}
+
+// WithPlanningStore enables the Planning section's HTTP API
+// (/api/plannings...). Without it, GET endpoints return empty results and
+// POST/write endpoints respond 503 "planning is not configured" — same
+// optional-store shape as WithChatStore.
+func WithPlanningStore(store planningStore) Option {
+	return func(server *Server) {
+		server.planning = store
 	}
 }
 
@@ -144,10 +183,15 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/echo", s.handleEcho)
 	s.mux.HandleFunc("/api/chat", s.handleChat)
 	s.mux.HandleFunc("/api/chat/stream", s.handleChatStream)
+	s.mux.HandleFunc("/api/chat/sessions", s.handleChatSessions)
+	s.mux.HandleFunc("/api/chat/sessions/", s.handleChatSessionDetail)
 	s.mux.HandleFunc("/api/approve", s.handleApprove)
+	s.mux.HandleFunc("/api/projects", s.handleProjects)
 	s.mux.HandleFunc("/api/sessions", s.handleSessions)
 	s.mux.HandleFunc("/api/sessions/", s.handleSessionAction)
 	s.mux.HandleFunc("/api/terminal/", s.handleTerminalStream)
+	s.mux.HandleFunc("/api/plannings", s.handlePlannings)
+	s.mux.HandleFunc("/api/plannings/", s.handlePlanningDetail)
 }
 
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {

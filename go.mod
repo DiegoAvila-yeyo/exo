@@ -5,10 +5,13 @@ go 1.26.1
 require (
 	github.com/anthropics/anthropic-sdk-go v1.43.0
 	github.com/creack/pty v1.1.24
+	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/tprasadtp/go-launchd v0.0.0-20240710170319-16c17c9d2432
 	github.com/yeyoos/nucleo-base v0.0.0
+	github.com/yeyoos/yeyo v0.0.0
 	golang.org/x/sys v0.47.0
+	modernc.org/sqlite v1.50.1
 )
 
 require (
@@ -23,7 +26,6 @@ require (
 	github.com/gobwas/pool v0.2.1 // indirect
 	github.com/gobwas/ws v1.4.0 // indirect
 	github.com/google/jsonschema-go v0.4.3 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/invopop/jsonschema v0.13.0 // indirect
 	github.com/mailru/easyjson v0.7.7 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
@@ -47,7 +49,8 @@ require (
 	modernc.org/libc v1.72.3 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
-	modernc.org/sqlite v1.50.1 // indirect
 )
 
 replace github.com/yeyoos/nucleo-base => ../nucleo-base
+
+replace github.com/yeyoos/yeyo => ../yeyo

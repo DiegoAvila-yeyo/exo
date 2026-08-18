@@ -15,10 +15,24 @@
   --danger: #f87171;
   --success: #34d399;
   --shadow: 0 24px 60px rgba(0, 0, 0, 0.28);
+  /* Single shared width for every centered element in the chat column —
+     greeting copy, suggestion chips, message log, composer. Keeping them
+     all on this one variable is what keeps the column feeling like one
+     coherent shape instead of independently-sized blocks; widen it here
+     once, everything follows. */
+  --chat-column: 680px;
 }
 
 * {
   box-sizing: border-box;
+}
+
+/* Defensive: component classes that set their own `display` (flex, grid,
+   ...) otherwise win over the browser's built-in `[hidden] { display: none }`
+   UA rule by source order, silently un-hiding anything toggled via the
+   `hidden` attribute. `[hidden]` should always mean hidden. */
+[hidden] {
+  display: none !important;
 }
 
 html,
@@ -41,10 +55,18 @@ input {
   font: inherit;
 }
 
+button {
+  border: 0;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+
 .shell {
   display: grid;
   grid-template-columns: 280px minmax(0, 1fr);
-  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
 }
 
 .sidebar {
@@ -55,15 +77,10 @@ input {
   padding: 18px 16px;
   background: #0f0f0f;
   border-right: 1px solid var(--border);
+  min-height: 0;
+  overflow-y: auto;
 }
 
-.sidebar-topbar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.sidebar-icon-button,
 .sidebar-nav-item,
 .new-chat-button,
 .primary-button,
@@ -71,24 +88,9 @@ input {
 .warning-button,
 .mini-button,
 .suggestion-chip {
-  border: 0;
-  cursor: pointer;
   transition: background 120ms ease, transform 120ms ease, border-color 120ms ease, opacity 120ms ease;
 }
 
-.sidebar-icon-button {
-  width: 36px;
-  height: 36px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 12px;
-  background: transparent;
-  color: var(--muted);
-}
-
-.sidebar-icon-button:hover,
-.sidebar-icon-button:focus-visible,
 .sidebar-nav-item:hover,
 .sidebar-nav-item:focus-visible,
 .new-chat-button:hover,
@@ -100,12 +102,6 @@ input {
 .warning-button:hover,
 .mini-button:hover {
   transform: translateY(-1px);
-}
-
-.sidebar-icon-button:hover,
-.sidebar-icon-button:focus-visible {
-  background: rgba(255, 255, 255, 0.06);
-  color: var(--text);
 }
 
 .brand {
@@ -123,8 +119,7 @@ input {
   padding: 0 4px;
 }
 
-.brand h1,
-.chat-empty-copy h2 {
+.brand h1 {
   margin: 0;
 }
 
@@ -189,18 +184,98 @@ input {
   color: var(--text);
 }
 
+.sidebar-nav-chevron {
+  margin-left: auto;
+  font-size: 0.75rem;
+  color: var(--muted);
+  transition: transform 150ms ease;
+}
+
+#project-section-toggle[aria-expanded="true"] .sidebar-nav-chevron {
+  transform: rotate(180deg);
+}
+
 .sidebar-section {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
   padding: 0 4px;
+}
+
+.sidebar-section-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 4px 6px;
+  border-radius: 8px;
+  text-align: left;
+}
+
+.sidebar-section-toggle:hover,
+.sidebar-section-toggle:focus-visible {
+  color: var(--text);
+}
+
+.sidebar-section-toggle .sidebar-section-header {
+  color: inherit;
+}
+
+.sidebar-section-chevron {
+  color: var(--muted);
+  font-size: 0.8rem;
+  line-height: 1;
+  transition: transform 150ms ease;
+}
+
+.sidebar-section-toggle[aria-expanded="false"] .sidebar-section-chevron {
+  transform: rotate(-90deg);
+}
+
+.sidebar-section-toggle[aria-expanded="false"] + .chat-session-list {
+  display: none;
 }
 
 .sidebar-placeholder {
   margin: 0;
+  padding: 0 14px;
   color: #7a7a7a;
   line-height: 1.5;
   font-size: 0.92rem;
+}
+
+.chat-session-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.chat-session-item {
+  display: block;
+  width: 100%;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: transparent;
+  color: var(--muted);
+  text-align: left;
+  font-size: 0.95rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.chat-session-item:hover,
+.chat-session-item:focus-visible {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text);
+}
+
+.chat-session-item.active {
+  background: var(--surface);
+  color: var(--text);
+  font-weight: 600;
 }
 
 .sidebar-account {
@@ -243,24 +318,27 @@ input {
 }
 
 .workspace {
-  min-height: 100vh;
+  height: 100%;
+  min-height: 0;
   padding: 0;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
 .workspace-shell {
   flex: 1 1 auto;
-  min-height: 100vh;
+  min-height: 0;
   display: flex;
   align-items: stretch;
   justify-content: center;
   padding: 28px;
+  overflow: hidden;
 }
 
 .chat-panel {
   width: min(100%, 980px);
-  min-height: calc(100vh - 56px);
+  min-height: 0;
   display: flex;
   flex-direction: column;
   gap: 18px;
@@ -269,7 +347,7 @@ input {
 .chat-status-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 16px;
   padding: 4px 2px;
 }
@@ -282,49 +360,53 @@ input {
   gap: 14px;
 }
 
+/* Empty state: title, input, and suggestion chips read as one centered
+   group (like a search-landing page) — the group centers as a whole
+   inside the available space, rather than the title centering itself
+   independently of the composer below it. */
+/* gap applies between every flex child, including the hidden chat-log
+   sitting between chat-empty-state and chat-form — so the visible space
+   ends up being 2x this value. Kept small on purpose. */
+.chat-panel--empty .chat-shell {
+  justify-content: flex-start;
+  padding-top: clamp(24px, 8vh, 100px);
+  gap: 8px;
+}
+
 .chat-empty-state {
-  flex: 1 1 auto;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  align-items: center;
-  gap: 20px;
-  padding: 24px 16px 12px;
+  padding: 0 16px;
   text-align: center;
   transition: opacity 180ms ease, transform 180ms ease;
 }
 
-.chat-empty-copy {
-  max-width: 740px;
-}
-
-.chat-kicker {
-  margin-bottom: 12px;
-}
-
-.chat-empty-copy h2 {
-  font-size: clamp(2.4rem, 5vw, 4rem);
-  line-height: 1.02;
-  letter-spacing: -0.05em;
-  font-weight: 600;
-}
-
-.chat-empty-copy p {
-  margin: 14px auto 0;
-  max-width: 640px;
-  color: var(--muted);
-  line-height: 1.6;
-  font-size: 1rem;
+.chat-wordmark {
+  margin: 0;
+  font-size: clamp(2.75rem, 6vw, 4rem);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--text);
 }
 
 .chat-form {
   width: 100%;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 10px;
-  align-items: center;
-  transition: transform 180ms ease;
+  max-width: var(--chat-column);
+  min-height: 200px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: 28px;
+  padding: 24px 26px 18px;
+  background: var(--surface);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+
+.chat-form:focus-within {
+  border-color: var(--border-strong);
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.06);
 }
 
 .chat-input-wrap {
@@ -333,12 +415,11 @@ input {
 
 .chat-form input {
   width: 100%;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  padding: 16px 20px;
-  background: var(--surface);
+  border: 0;
+  padding: 4px 0;
+  background: transparent;
   color: var(--text);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+  font-size: 1.05rem;
 }
 
 .chat-form input::placeholder {
@@ -346,8 +427,72 @@ input {
 }
 
 .chat-form input:focus-visible {
-  outline: 2px solid rgba(255, 255, 255, 0.14);
-  outline-offset: 1px;
+  outline: none;
+}
+
+.chat-form-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+/* Standalone on/off switch — not wired to anything yet. */
+.power-toggle {
+  width: 44px;
+  height: 26px;
+  flex-shrink: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--border);
+  position: relative;
+  transition: background 150ms ease, border-color 150ms ease;
+}
+
+.power-toggle:hover,
+.power-toggle:focus-visible {
+  border-color: var(--border-strong);
+}
+
+.power-toggle-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  background: #cfcfcf;
+  transition: transform 150ms ease, background 150ms ease;
+}
+
+.power-toggle[aria-checked="true"] {
+  background: var(--success);
+  border-color: var(--success);
+}
+
+.power-toggle[aria-checked="true"] .power-toggle-knob {
+  transform: translateX(18px);
+  background: #ffffff;
+}
+
+.chat-send-button {
+  width: 40px;
+  height: 40px;
+  border-radius: 999px;
+  background: #f5f5f5;
+  color: #111111;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.1rem;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.chat-send-button:hover,
+.chat-send-button:focus-visible {
+  background: #ffffff;
+  transform: translateY(-1px);
 }
 
 .primary-button,
@@ -390,17 +535,25 @@ button:disabled {
   display: flex;
   flex-wrap: wrap;
   justify-content: center;
-  gap: 10px;
-  max-width: 860px;
+  gap: 8px;
+  width: 100%;
+  max-width: var(--chat-column);
+  margin: 0 auto;
+  transition: opacity 180ms ease, transform 180ms ease;
 }
 
 .suggestion-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
   border: 1px solid var(--border);
   border-radius: 999px;
-  padding: 11px 15px;
+  padding: 9px 18px;
   background: #1b1b1b;
-  color: #dddddd;
+  color: #cfcfcf;
   font-weight: 500;
+  font-size: 0.88rem;
+  white-space: nowrap;
 }
 
 .suggestion-chip:hover,
@@ -413,6 +566,9 @@ button:disabled {
 .chat-log {
   min-height: 0;
   flex: 1 1 auto;
+  width: 100%;
+  max-width: var(--chat-column);
+  margin: 0 auto;
   overflow-y: auto;
   display: flex;
   flex-direction: column;
@@ -557,18 +713,6 @@ button:disabled {
   transform: translateY(10px);
 }
 
-.chat-panel--empty .chat-form {
-  max-width: 860px;
-}
-
-.chat-panel--empty .chat-form input {
-  padding: 18px 22px;
-  font-size: 1.05rem;
-}
-
-.chat-panel--empty .chat-form .primary-button {
-  padding: 16px 20px;
-}
 
 .chat-panel--active {
   justify-content: flex-end;
@@ -580,6 +724,14 @@ button:disabled {
   overflow: hidden;
   padding: 0;
   transform: translateY(-10px);
+  pointer-events: none;
+}
+
+.chat-panel--active .chat-suggestions {
+  opacity: 0;
+  max-height: 0;
+  overflow: hidden;
+  margin: 0 auto;
   pointer-events: none;
 }
 
@@ -620,15 +772,231 @@ button:disabled {
 }
 
 @media (max-width: 720px) {
-  .chat-form {
-    grid-template-columns: 1fr;
-  }
-
-  .chat-empty-copy h2 {
-    font-size: 2.3rem;
+  .chat-wordmark {
+    font-size: 2.4rem;
   }
 
   .sidebar-account {
     padding-bottom: 4px;
   }
+}
+
+/* --- Planning (Round 1: list + board shell, no canvas engine yet) --- */
+
+.sidebar-nav-item.active {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text);
+}
+
+.planning-shell {
+  align-items: stretch;
+}
+
+.planning-view-inner {
+  width: min(100%, 1100px);
+  min-height: 0;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.planning-list-screen {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  min-height: 0;
+}
+
+.planning-list-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.planning-list-header h2 {
+  margin: 0;
+  font-size: 1.3rem;
+}
+
+.planning-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.planning-list-item {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  padding: 14px 18px;
+  border-radius: 16px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--text);
+  text-align: left;
+}
+
+.planning-list-item:hover,
+.planning-list-item:focus-visible {
+  border-color: var(--border-strong);
+  background: var(--surface);
+}
+
+.planning-list-item-name {
+  font-weight: 700;
+}
+
+.planning-list-item-meta {
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.planning-board-screen {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-height: 0;
+  height: 100%;
+}
+
+.planning-board-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.planning-breadcrumb {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 0.92rem;
+  min-width: 0;
+}
+
+.planning-breadcrumb select {
+  background: transparent;
+  color: var(--text);
+  border: none;
+  font: inherit;
+  font-weight: 700;
+  max-width: 220px;
+}
+
+.planning-board-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.planning-notes-panel {
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--panel);
+  padding: 12px 14px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.planning-notes-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.planning-note-item {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: var(--surface);
+}
+
+.planning-note-type {
+  display: inline-block;
+  color: var(--muted);
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 4px;
+}
+
+/* Round 2: marks a Knowledge entry the AI created that's still pending
+   human review — never applied to Boards, which carry no Author at all
+   (see PLANNING_MANIFESTO.md / build_prompt_PLANNING_ROUND2.md's Tier
+   policy: Boards are structural, not canonical knowledge). */
+.planning-note-badge {
+  display: inline-block;
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.planning-note-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.planning-canvas-placeholder {
+  flex: 1 1 auto;
+  min-height: 200px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  text-align: center;
+  border: 1px dashed var(--border-strong);
+  border-radius: 20px;
+  background: var(--panel);
+  color: var(--muted);
+  padding: 20px;
+}
+
+.planning-canvas-placeholder-title {
+  margin: 0;
+  color: var(--text);
+  font-weight: 600;
+}
+
+.planning-canvas-placeholder .muted {
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+.planning-chat-slot {
+  flex: 0 0 auto;
+  width: 100%;
+  max-height: 40vh;
+  display: flex;
+}
+
+/* Docked mode: the same #chat-panel, re-parented into the board screen —
+   shrink the empty-state landing copy so it reads as a bottom-docked
+   composer instead of the full centered Home page. */
+.chat-panel--docked {
+  width: 100%;
+  min-height: 0;
+}
+
+.chat-panel--docked .chat-empty-state,
+.chat-panel--docked .chat-suggestions {
+  display: none;
+}
+
+.chat-panel--docked .chat-shell {
+  padding-top: 0;
 }
