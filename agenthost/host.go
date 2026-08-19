@@ -80,7 +80,7 @@ func ValidateEnv() error {
 	if err != nil {
 		return err
 	}
-	systemPrompt := buildSystemPrompt(rootPath)
+	systemPrompt := buildSystemPrompt(rootPath, "")
 	_, err = buildProviderFromEnv(systemPrompt)
 	return err
 }
@@ -109,7 +109,7 @@ func New(ctx context.Context, manager *sessions.Manager, planningStore *planning
 	if err := os.Chdir(rootPath); err != nil {
 		return nil, fmt.Errorf("agenthost: change working directory to %q: %w", rootPath, err)
 	}
-	systemPrompt := buildSystemPrompt(rootPath)
+	systemPrompt := buildSystemPrompt(rootPath, "")
 	provider, err := buildProviderFromEnv(systemPrompt)
 	if err != nil {
 		return nil, err
@@ -307,7 +307,7 @@ func (h *Host) SetRootPath(path string) error {
 	if err := os.Chdir(clean); err != nil {
 		return fmt.Errorf("agenthost: change working directory to %q: %w", clean, err)
 	}
-	systemPrompt := buildSystemPrompt(clean)
+	systemPrompt := buildSystemPrompt(clean, "")
 	if h.agent != nil {
 		h.agent.System = systemPrompt
 	}
@@ -551,7 +551,13 @@ func logMCPProgress(server string, status mcp.ProgressStatus, total int) {
 	}
 }
 
-func buildSystemPrompt(rootPath string) string {
+// buildSystemPrompt builds the base system prompt for rootPath. canvasBlock
+// is dynamicCentro's per-turn output (canvas_centro.go) — the active
+// Canvas objects' current content, injected right after the static
+// yeyo.RenderCentro() block. Pass "" when there is no canvas context to
+// inject (e.g. Canvas not configured, or between-turn rebuilds that don't
+// go through RefreshCanvasCentro).
+func buildSystemPrompt(rootPath, canvasBlock string) string {
 	override := strings.TrimSpace(os.Getenv("EXO_AGENT_SYSTEM_PROMPT"))
 	if override != "" {
 		return override
@@ -559,6 +565,9 @@ func buildSystemPrompt(rootPath string) string {
 
 	base := "You are exo's integrated coding agent. Help the user from the browser chat, prefer safe tool use, and explain failures clearly."
 	base = base + "\n\n" + yeyo.RenderCentro()
+	if canvasBlock != "" {
+		base = base + canvasBlock
+	}
 	if !yeyoGateEnabled() {
 		// exp1d: force the periferia index into every turn's system prompt so
 		// the model no longer has to decide whether to go look for the

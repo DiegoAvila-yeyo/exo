@@ -217,6 +217,11 @@ func Run(ctx context.Context, config Config) error {
 		host.SetMessages(history)
 		host.SetPlanningContext(planningID, boardID)
 		host.BeginTurn(input)
+		// Must run after BeginTurn (canvasCell.projectID is only current once
+		// BeginTurn has read it off currentRootPath) and every turn,
+		// unconditionally — see Host.RefreshCanvasCentro's doc comment for
+		// why this can't piggyback on SetRootPath's change-guarded rebuild.
+		host.RefreshCanvasCentro()
 		err := host.Run(ctx, input, server.ChatOutputWriter())
 		// Read back whatever a navigation tool committed regardless of err
 		// — see AgentRunner's doc comment (termserver/chat.go) and
