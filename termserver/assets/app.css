@@ -1000,3 +1000,349 @@ button:disabled {
 .chat-panel--docked .chat-shell {
   padding-top: 0;
 }
+
+/* --- Canvas home view: sidebar (.sidebar, unchanged) / canvas center /
+   chat right. #home-view stays a .workspace-shell like every other view,
+   but instead of centering one child (.chat-panel) it now stretches two:
+   #canvas-view (grows) and .chat-panel (fixed right column). Planning's
+   own view (.planning-shell) is untouched — it still gets the full
+   .workspace-shell width, since only #home-view gets this split. */
+#home-view {
+  justify-content: flex-start;
+  gap: 20px;
+}
+
+#home-view .chat-panel {
+  width: 420px;
+  flex: 0 0 420px;
+}
+
+.canvas-view {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 20px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  overflow: auto;
+}
+
+.canvas-empty-state {
+  margin: auto;
+  max-width: 360px;
+  text-align: center;
+}
+
+.canvas-objects {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.canvas-objects:empty {
+  display: none;
+}
+
+.canvas-objects:empty ~ .canvas-empty-state {
+  display: block;
+}
+
+.canvas-objects:not(:empty) ~ .canvas-empty-state {
+  display: none;
+}
+
+.canvas-object-card {
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: #1b1b1b;
+  padding: 14px 16px;
+  cursor: pointer;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+
+.canvas-object-card:hover,
+.canvas-object-card:focus-visible {
+  border-color: var(--border-strong);
+  background: #202020;
+}
+
+.canvas-object-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.canvas-object-card__name {
+  font-weight: 700;
+}
+
+.canvas-object-card__badge {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+
+.canvas-object-card__badge[data-active="true"] {
+  color: #86efac;
+  border-color: rgba(134, 239, 172, 0.3);
+}
+
+/* Diagram render surface: nodes/edges are absolutely positioned within a
+   fixed-size stage per the payload's layout.width/height (§6 of the build
+   plan); an SVG overlay in the same stage draws edges as lines between
+   node centers. style_tokens map 1:1 to a small fixed class list — never
+   arbitrary inline colors. */
+.canvas-diagram-stage {
+  position: relative;
+  background: #141414;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: auto;
+}
+
+.canvas-diagram-svg {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.canvas-node {
+  position: absolute;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #1f1f1f;
+  color: var(--text);
+  padding: 8px 10px;
+  font-size: 0.86rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
+
+.canvas-node--accent {
+  border-color: rgba(255, 255, 255, 0.35);
+  background: #262626;
+}
+
+.canvas-node--muted {
+  color: var(--muted);
+}
+
+.canvas-node--warning {
+  border-color: rgba(245, 158, 11, 0.4);
+  background: rgba(245, 158, 11, 0.08);
+  color: #fcd34d;
+}
+
+.canvas-edge-line {
+  stroke: var(--border-strong);
+  stroke-width: 1.5;
+}
+
+.canvas-edge-line--accent {
+  stroke: rgba(255, 255, 255, 0.5);
+}
+
+.canvas-edge-line--muted {
+  stroke: var(--border);
+}
+
+.canvas-edge-line--warning {
+  stroke: rgba(245, 158, 11, 0.5);
+}
+
+.canvas-group-frame {
+  position: absolute;
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+}
+
+.canvas-group-label {
+  position: absolute;
+  font-size: 0.72rem;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+/* Contextual materialize signal (Canvas build spec: the button only
+   appears once the backend itself has flagged a draft as well-defined via
+   the canvas_suggest SSE event — never the only way to materialize). */
+.canvas-suggest-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(134, 239, 172, 0.2);
+  background: rgba(134, 239, 172, 0.08);
+}
+
+.canvas-suggest-banner[hidden] {
+  display: none;
+}
+
+.canvas-suggest-banner span:first-child {
+  flex: 1 1 auto;
+}
+
+/* --- Floating object-editing panel: no existing modal primitive in this
+   codebase (the closest things, .approval-banner and .terminal-overlay,
+   are both inline/non-floating), so this is built from the same style
+   vocabulary — --panel/--panel-strong/--border/--shadow — from scratch. */
+.canvas-object-panel {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.canvas-object-panel[hidden] {
+  display: none;
+}
+
+.canvas-object-panel__backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.canvas-object-panel__card {
+  position: relative;
+  width: min(92vw, 1100px);
+  height: min(86vh, 760px);
+  display: flex;
+  flex-direction: column;
+  background: var(--panel-strong);
+  border: 1px solid var(--border-strong);
+  border-radius: 20px;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.canvas-object-panel__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.canvas-object-panel__title {
+  font-weight: 700;
+}
+
+.canvas-object-panel__close {
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  display: grid;
+  place-items: center;
+}
+
+.canvas-object-panel__close:hover {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.canvas-object-panel__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 1fr 360px;
+}
+
+.canvas-object-panel__manual,
+.canvas-object-panel__minichat {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 16px 20px;
+}
+
+.canvas-object-panel__manual {
+  border-right: 1px solid var(--border);
+}
+
+.canvas-object-payload-input {
+  flex: 1 1 auto;
+  min-height: 0;
+  resize: none;
+  background: #141414;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 12px;
+  color: var(--text);
+  font-family: "SFMono-Regular", "Menlo", monospace;
+  font-size: 0.86rem;
+  line-height: 1.5;
+}
+
+.canvas-object-panel__manual-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.canvas-object-save-feedback {
+  color: var(--muted);
+  font-size: 0.86rem;
+}
+
+.canvas-minichat-log {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.canvas-minichat-form {
+  display: flex;
+  gap: 8px;
+}
+
+.canvas-minichat-form input {
+  flex: 1 1 auto;
+  background: #141414;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 10px 14px;
+  color: var(--text);
+}
+
+@media (max-width: 900px) {
+  #home-view {
+    flex-direction: column;
+  }
+
+  #home-view .chat-panel {
+    width: 100%;
+    flex: 1 1 auto;
+  }
+
+  .canvas-object-panel__body {
+    grid-template-columns: 1fr;
+    overflow-y: auto;
+  }
+
+  .canvas-object-panel__manual {
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+}

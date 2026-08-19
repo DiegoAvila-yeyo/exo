@@ -53,6 +53,23 @@
     planningNotesList: document.getElementById("planning-notes-list"),
     planningCanvasPlaceholder: document.getElementById("planning-canvas-placeholder"),
     planningChatSlot: document.getElementById("planning-chat-slot"),
+    canvasView: document.getElementById("canvas-view"),
+    canvasEmptyState: document.getElementById("canvas-empty-state"),
+    canvasObjects: document.getElementById("canvas-objects"),
+    canvasSuggestBanner: document.getElementById("canvas-suggest-banner"),
+    canvasSuggestText: document.getElementById("canvas-suggest-text"),
+    canvasSuggestButton: document.getElementById("canvas-suggest-button"),
+    canvasSuggestDismiss: document.getElementById("canvas-suggest-dismiss"),
+    canvasObjectPanel: document.getElementById("canvas-object-panel"),
+    canvasObjectPanelBackdrop: document.getElementById("canvas-object-panel-backdrop"),
+    canvasObjectPanelTitle: document.getElementById("canvas-object-panel-title"),
+    canvasObjectPanelClose: document.getElementById("canvas-object-panel-close"),
+    canvasObjectPayloadInput: document.getElementById("canvas-object-payload-input"),
+    canvasObjectSaveButton: document.getElementById("canvas-object-save-button"),
+    canvasObjectSaveFeedback: document.getElementById("canvas-object-save-feedback"),
+    canvasMinichatLog: document.getElementById("canvas-minichat-log"),
+    canvasMinichatForm: document.getElementById("canvas-minichat-form"),
+    canvasMinichatInput: document.getElementById("canvas-minichat-input"),
   };
 
   const CHAT_SESSION_STORAGE_KEY = "exo.activeChatSessionId";
@@ -108,6 +125,10 @@
     // event carrying any other turn_id is stale (e.g. arrived late after a
     // reconnect, after the user already moved on) and must be ignored.
     lastTurnId: null,
+    // --- Canvas ---
+    canvas: null, // last-fetched ProjectCanvas (or null before first fetch)
+    activeCanvasObjectId: null, // which object the floating panel currently has open
+    pendingCanvasSuggestion: null, // {object_id, name} from the most recent canvas_suggest SSE event
   };
 
   // Where #chat-panel lives when no Planning board is open — captured once
@@ -398,6 +419,7 @@
     // "Recent" filters correctly on first paint instead of flashing
     // unfiltered then re-rendering.
     restoreActiveProject();
+    await refreshCanvasView();
     await restoreChatSession();
   }
 
@@ -554,6 +576,7 @@
       window.localStorage.removeItem(ACTIVE_PROJECT_KEY);
     }
     renderChatSessionList();
+    refreshCanvasView();
   }
 
   function restoreActiveProject() {
@@ -1123,6 +1146,14 @@
         // that — a plain refetch here is enough, gated so a turn that
         // touched nothing doesn't cost two requests for no reason.
         refreshBoardScreenAfterTurn();
+        // Canvas state changes (a new draft, a materialize, an edit) are
+        // infrequent enough that a full refetch per turn is cheap — keeps
+        // the frontend decoupled from agenthost internals rather than
+        // needing its own per-mutation SSE event.
+        refreshCanvasView();
+        break;
+      case "canvas_suggest":
+        showCanvasSuggestBanner({object_id: event.object_id, name: event.name});
         break;
       default:
         break;
@@ -1522,4 +1553,337 @@
     }
     return payload;
   }
+
+  // patchJSON mirrors postJSON but for PATCH — the manual-edit write path's
+  // method, since it's a partial update (a new atom) to an existing
+  // object, not a create. Callers that need to distinguish a 409
+  // stale_version conflict from any other failure should catch the thrown
+  // Error and check error.message === "stale_version".
+  async function patchJSON(url, body) {
+    const response = await fetch(url, {
+      method: "PATCH",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+    const text = await response.text();
+    const payload = text ? JSON.parse(text) : null;
+    if (!response.ok) {
+      if (payload && payload.error) {
+        throw new Error(payload.error);
+      }
+      throw new Error(text || ("Request failed with status " + response.status));
+    }
+    return payload;
+  }
+
+  // --- Canvas: sidebar (unchanged) / canvas center / chat right. Fetches
+  // the current project's ProjectCanvas and renders materialized objects;
+  // drafts are never shown here (they're not visible on the Canvas until
+  // materialized — see canvasstore's Phase). Clicking a materialized
+  // object opens the floating editing panel (openCanvasObjectPanel).
+
+  async function refreshCanvasView() {
+    if (!state.activeProjectPath) {
+      state.canvas = null;
+      renderCanvasView();
+      return;
+    }
+    try {
+      const pc = await fetchJSON("/api/canvases?project_path=" + encodeURIComponent(state.activeProjectPath));
+      state.canvas = pc;
+    } catch (error) {
+      // Fail quiet — a broken Canvas fetch must not block the rest of the
+      // UI, same posture as agenthost's dynamicCentro fail-open.
+      state.canvas = null;
+    }
+    renderCanvasView();
+  }
+
+  function materializedCanvasObjects() {
+    if (!state.canvas || !state.canvas.objects) {
+      return [];
+    }
+    return state.canvas.objects.filter(function (obj) { return obj.phase === "materialized"; });
+  }
+
+  function currentAtomBody(objectId) {
+    if (!state.canvas || !state.canvas.objects) {
+      return null;
+    }
+    const obj = state.canvas.objects.find(function (o) { return o.object_id === objectId; });
+    if (!obj || !obj.anchor_atom_ids || obj.anchor_atom_ids.length === 0) {
+      return null;
+    }
+    const headId = obj.anchor_atom_ids[obj.anchor_atom_ids.length - 1];
+    const atom = (state.canvas.atoms || []).find(function (a) { return a.atom_id === headId; });
+    return atom ? atom.body : null;
+  }
+
+  function renderCanvasView() {
+    refs.canvasObjects.innerHTML = "";
+    const objects = materializedCanvasObjects();
+    objects.forEach(function (obj) {
+      const card = document.createElement("div");
+      card.className = "canvas-object-card";
+      card.tabIndex = 0;
+      card.setAttribute("role", "button");
+
+      const header = document.createElement("div");
+      header.className = "canvas-object-card__header";
+      const name = document.createElement("span");
+      name.className = "canvas-object-card__name";
+      name.textContent = obj.name;
+      const badge = document.createElement("span");
+      badge.className = "canvas-object-card__badge";
+      badge.dataset.active = obj.activation === "active" ? "true" : "false";
+      badge.textContent = obj.activation === "active" ? "Active" : obj.type;
+      header.appendChild(name);
+      header.appendChild(badge);
+      card.appendChild(header);
+
+      if (obj.type === "diagram") {
+        const body = currentAtomBody(obj.object_id) || obj.payload;
+        card.appendChild(renderDiagramStage(body));
+      }
+
+      const open = function () { openCanvasObjectPanel(obj.object_id); };
+      card.addEventListener("click", open);
+      card.addEventListener("keydown", function (event) {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          open();
+        }
+      });
+
+      refs.canvasObjects.appendChild(card);
+    });
+  }
+
+  // renderDiagramStage renders a diagram payload (§6 of the build plan:
+  // nodes/edges/groups/layout/style_tokens) as absolutely-positioned node
+  // divs over an SVG edge overlay, inside a stage sized from
+  // layout.width/height. style tokens map 1:1 to fixed CSS classes — never
+  // arbitrary inline colors.
+  function renderDiagramStage(payload) {
+    const stage = document.createElement("div");
+    stage.className = "canvas-diagram-stage";
+    if (!payload) {
+      stage.style.height = "80px";
+      return stage;
+    }
+    const layout = payload.layout || {};
+    const width = layout.width || 400;
+    const height = layout.height || 240;
+    stage.style.width = width + "px";
+    stage.style.height = height + "px";
+
+    (payload.groups || []).forEach(function (group) {
+      const frame = document.createElement("div");
+      frame.className = "canvas-group-frame";
+      frame.style.left = (group.x || 0) + "px";
+      frame.style.top = (group.y || 0) + "px";
+      frame.style.width = (group.w || 100) + "px";
+      frame.style.height = (group.h || 100) + "px";
+      stage.appendChild(frame);
+      if (group.label) {
+        const label = document.createElement("span");
+        label.className = "canvas-group-label";
+        label.style.left = (group.x || 0) + 4 + "px";
+        label.style.top = (group.y || 0) - 16 + "px";
+        label.textContent = group.label;
+        stage.appendChild(label);
+      }
+    });
+
+    const svgNS = "http://www.w3.org/2000/svg";
+    const svg = document.createElementNS(svgNS, "svg");
+    svg.setAttribute("class", "canvas-diagram-svg");
+    svg.setAttribute("width", String(width));
+    svg.setAttribute("height", String(height));
+
+    const nodeById = {};
+    (payload.nodes || []).forEach(function (node) { nodeById[node.id] = node; });
+
+    (payload.edges || []).forEach(function (edge) {
+      const from = nodeById[edge.from];
+      const to = nodeById[edge.to];
+      if (!from || !to) {
+        return;
+      }
+      const line = document.createElementNS(svgNS, "line");
+      line.setAttribute("x1", String((from.x || 0) + (from.w || 160) / 2));
+      line.setAttribute("y1", String((from.y || 0) + (from.h || 60) / 2));
+      line.setAttribute("x2", String((to.x || 0) + (to.w || 160) / 2));
+      line.setAttribute("y2", String((to.y || 0) + (to.h || 60) / 2));
+      line.setAttribute("class", "canvas-edge-line" + (edge.style ? " canvas-edge-line--" + edge.style : ""));
+      svg.appendChild(line);
+    });
+    stage.appendChild(svg);
+
+    (payload.nodes || []).forEach(function (node) {
+      const el = document.createElement("div");
+      el.className = "canvas-node" + (node.style ? " canvas-node--" + node.style : "");
+      el.style.left = (node.x || 0) + "px";
+      el.style.top = (node.y || 0) + "px";
+      el.style.width = (node.w || 160) + "px";
+      el.style.height = (node.h || 60) + "px";
+      el.textContent = node.label || "";
+      stage.appendChild(el);
+    });
+
+    return stage;
+  }
+
+  function openCanvasObjectPanel(objectId) {
+    if (!state.canvas) {
+      return;
+    }
+    const obj = (state.canvas.objects || []).find(function (o) { return o.object_id === objectId; });
+    if (!obj) {
+      return;
+    }
+    state.activeCanvasObjectId = objectId;
+    refs.canvasObjectPanelTitle.textContent = obj.name;
+    const body = currentAtomBody(objectId) || obj.payload || {};
+    refs.canvasObjectPayloadInput.value = JSON.stringify(body, null, 2);
+    refs.canvasObjectSaveFeedback.textContent = "";
+    refs.canvasMinichatLog.innerHTML = "";
+    refs.canvasObjectPanel.hidden = false;
+    refs.canvasObjectPayloadInput.focus();
+  }
+
+  function closeCanvasObjectPanel() {
+    refs.canvasObjectPanel.hidden = true;
+    state.activeCanvasObjectId = null;
+  }
+
+  refs.canvasObjectPanelClose.addEventListener("click", closeCanvasObjectPanel);
+  refs.canvasObjectPanelBackdrop.addEventListener("click", closeCanvasObjectPanel);
+  document.addEventListener("keydown", function (event) {
+    if (event.key === "Escape" && !refs.canvasObjectPanel.hidden) {
+      closeCanvasObjectPanel();
+    }
+  });
+
+  // Manual edit save: PATCH with expected_version = the canvas version this
+  // panel was opened against. A 409 stale_version means someone else (a
+  // tool-driven edit, or another tab) wrote in between — per the build
+  // spec's CAS guarantee, refetch and let the user retry rather than
+  // silently overwriting.
+  refs.canvasObjectSaveButton.addEventListener("click", async function () {
+    if (!state.activeCanvasObjectId || !state.activeProjectPath || !state.canvas) {
+      return;
+    }
+    let payload;
+    try {
+      payload = JSON.parse(refs.canvasObjectPayloadInput.value);
+    } catch (error) {
+      refs.canvasObjectSaveFeedback.textContent = "Invalid JSON: " + error.message;
+      return;
+    }
+    refs.canvasObjectSaveFeedback.textContent = "Saving…";
+    try {
+      const url = "/api/canvases/objects/" + encodeURIComponent(state.activeCanvasObjectId) +
+        "?project_path=" + encodeURIComponent(state.activeProjectPath) +
+        "&csrf_token=" + encodeURIComponent(csrf);
+      const updated = await patchJSON(url, {payload: payload, expected_version: state.canvas.version});
+      state.canvas = updated;
+      refs.canvasObjectSaveFeedback.textContent = "Saved.";
+      renderCanvasView();
+    } catch (error) {
+      if (error && error.message === "stale_version") {
+        refs.canvasObjectSaveFeedback.textContent = "Someone else edited this object — reloading, please retry.";
+        await refreshCanvasView();
+      } else {
+        refs.canvasObjectSaveFeedback.textContent = error.message || "Save failed.";
+      }
+    }
+  });
+
+  // The mini-chat is scoped by reference, not by a separate session/
+  // protocol: it sends an ordinary chat message prefixed with which Canvas
+  // object it's about, through the same /api/chat path as the main
+  // composer, so the agent's normal edit/read tools (and the dynamicCentro
+  // anchor, if this object happens to be active) apply exactly as they
+  // would from the main chat.
+  refs.canvasMinichatForm.addEventListener("submit", async function (event) {
+    event.preventDefault();
+    const message = refs.canvasMinichatInput.value.trim();
+    if (!message || !state.activeCanvasObjectId || !state.canvas) {
+      return;
+    }
+    const obj = (state.canvas.objects || []).find(function (o) { return o.object_id === state.activeCanvasObjectId; });
+    const scoped = "Regarding Canvas object \"" + (obj ? obj.name : "") + "\" (object_id " +
+      state.activeCanvasObjectId + "): " + message;
+    const entry = document.createElement("p");
+    entry.textContent = "You: " + message;
+    refs.canvasMinichatLog.appendChild(entry);
+    refs.canvasMinichatInput.value = "";
+    try {
+      const body = {message: scoped};
+      if (state.activeChatSessionId) {
+        body.session_id = state.activeChatSessionId;
+      }
+      if (state.activeProjectPath) {
+        body.project_path = state.activeProjectPath;
+      }
+      body.planning_id = "";
+      body.board_id = "";
+      body.client_id = clientId;
+      body.turn_id = newTurnId();
+      await postJSON("/api/chat?csrf_token=" + encodeURIComponent(csrf), body);
+    } catch (error) {
+      const errEntry = document.createElement("p");
+      errEntry.textContent = "Error: " + (error.message || "could not send");
+      refs.canvasMinichatLog.appendChild(errEntry);
+    }
+  });
+
+  // --- Materialize signal (canvas_suggest SSE event) ---
+  //
+  // The button is a contextual affordance, never the only way to
+  // materialize — natural language ("materialízalo") and the /materialize
+  // slash command both work independent of whether this banner ever
+  // appears (see canvas_tools.go / termserver/canvas.go).
+
+  function showCanvasSuggestBanner(suggestion) {
+    state.pendingCanvasSuggestion = suggestion;
+    refs.canvasSuggestText.textContent = "\"" + suggestion.name + "\" looks ready to materialize.";
+    refs.canvasSuggestBanner.hidden = false;
+  }
+
+  function hideCanvasSuggestBanner() {
+    state.pendingCanvasSuggestion = null;
+    refs.canvasSuggestBanner.hidden = true;
+  }
+
+  refs.canvasSuggestDismiss.addEventListener("click", hideCanvasSuggestBanner);
+
+  refs.canvasSuggestButton.addEventListener("click", async function () {
+    if (!state.pendingCanvasSuggestion) {
+      return;
+    }
+    const name = state.pendingCanvasSuggestion.name;
+    hideCanvasSuggestBanner();
+    try {
+      const body = {message: "/materialize " + name};
+      if (state.activeChatSessionId) {
+        body.session_id = state.activeChatSessionId;
+      }
+      if (state.activeProjectPath) {
+        body.project_path = state.activeProjectPath;
+      }
+      body.planning_id = "";
+      body.board_id = "";
+      body.client_id = clientId;
+      body.turn_id = newTurnId();
+      await postJSON("/api/chat?csrf_token=" + encodeURIComponent(csrf), body);
+      await refreshCanvasView();
+    } catch (error) {
+      setChatFeedback(error.message || "Could not materialize.");
+    }
+  });
 })();

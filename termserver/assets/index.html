@@ -118,6 +118,18 @@
 
     <main class="workspace">
       <div class="workspace-shell" id="home-view">
+        <section id="canvas-view" class="canvas-view" aria-label="Canvas">
+          <div id="canvas-empty-state" class="canvas-empty-state">
+            <p class="muted">Nothing on the Canvas yet. Discuss something with the agent — a diagram it can draft appears here once materialized.</p>
+          </div>
+          <div id="canvas-objects" class="canvas-objects" aria-live="polite"></div>
+          <div id="canvas-suggest-banner" class="canvas-suggest-banner" hidden>
+            <span id="canvas-suggest-text"></span>
+            <button id="canvas-suggest-button" class="ghost-button" type="button">Materialize</button>
+            <button id="canvas-suggest-dismiss" class="ghost-button" type="button" aria-label="Dismiss">✕</button>
+          </div>
+        </section>
+
         <section id="chat-panel" class="chat-panel chat-panel--empty">
           <div class="chat-status-row">
             <span id="chat-status-indicator" class="status-pill" data-state="idle">Idle</span>
@@ -254,6 +266,35 @@
         </div>
       </div>
     </main>
+  </div>
+
+  <div id="canvas-object-panel" class="canvas-object-panel" hidden>
+    <div id="canvas-object-panel-backdrop" class="canvas-object-panel__backdrop"></div>
+    <div class="canvas-object-panel__card" role="dialog" aria-modal="true" aria-labelledby="canvas-object-panel-title">
+      <header class="canvas-object-panel__header">
+        <span id="canvas-object-panel-title" class="canvas-object-panel__title"></span>
+        <button id="canvas-object-panel-close" class="canvas-object-panel__close" type="button" aria-label="Close">✕</button>
+      </header>
+      <div class="canvas-object-panel__body">
+        <section class="canvas-object-panel__manual">
+          <p class="chat-shell-label">Manual edit</p>
+          <textarea id="canvas-object-payload-input" class="canvas-object-payload-input" spellcheck="false"></textarea>
+          <div class="canvas-object-panel__manual-actions">
+            <button id="canvas-object-save-button" class="primary-button" type="button">Save</button>
+            <span id="canvas-object-save-feedback" class="canvas-object-save-feedback"></span>
+          </div>
+        </section>
+        <section class="canvas-object-panel__minichat">
+          <p class="chat-shell-label">Ask the agent</p>
+          <div id="canvas-minichat-log" class="canvas-minichat-log" aria-live="polite"></div>
+          <form id="canvas-minichat-form" class="canvas-minichat-form">
+            <label class="sr-only" for="canvas-minichat-input">Message about this object</label>
+            <input id="canvas-minichat-input" type="text" placeholder="Ask about or edit this object" autocomplete="off">
+            <button type="submit" class="chat-send-button" aria-label="Send"><span aria-hidden="true">↑</span></button>
+          </form>
+        </section>
+      </div>
+    </div>
   </div>
 
   <script src="/assets/vendor/xterm/xterm.js"></script>
