@@ -156,6 +156,10 @@ func Run(ctx context.Context, config Config) error {
 	if planningStore != nil {
 		planningStoreOpt = termserver.WithPlanningStore(planningStore)
 	}
+	var canvasStoreOpt termserver.Option
+	if canvasStore != nil {
+		canvasStoreOpt = termserver.WithCanvasStore(canvasStore)
+	}
 
 	shutdownCh := make(chan error, 1)
 	var httpServer *http.Server
@@ -247,6 +251,9 @@ func Run(ctx context.Context, config Config) error {
 	}
 	if planningStoreOpt != nil {
 		termserverOpts = append(termserverOpts, planningStoreOpt)
+	}
+	if canvasStoreOpt != nil {
+		termserverOpts = append(termserverOpts, canvasStoreOpt)
 	}
 	if home, homeErr := os.UserHomeDir(); homeErr == nil {
 		termserverOpts = append(termserverOpts, termserver.WithProjectRoot(home))

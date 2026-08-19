@@ -72,6 +72,7 @@ type Server struct {
 	projectRoot     string
 	scanProjects    projectScanner
 	planning        planningStore
+	canvas          canvasStore
 }
 
 type sessionHub struct {
@@ -141,6 +142,16 @@ func WithPlanningStore(store planningStore) Option {
 	}
 }
 
+// WithCanvasStore enables the Canvas section's HTTP API (/api/canvases...).
+// Without it, GET /api/canvases returns an empty ProjectCanvas and
+// write endpoints respond 503 "canvas is not configured" — same
+// optional-store shape as WithPlanningStore.
+func WithCanvasStore(store canvasStore) Option {
+	return func(server *Server) {
+		server.canvas = store
+	}
+}
+
 func New(port int, store sessionStore, opts ...Option) (*Server, error) {
 	if store == nil {
 		return nil, errors.New("termserver: session store is required")
@@ -192,6 +203,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/terminal/", s.handleTerminalStream)
 	s.mux.HandleFunc("/api/plannings", s.handlePlannings)
 	s.mux.HandleFunc("/api/plannings/", s.handlePlanningDetail)
+	s.mux.HandleFunc("/api/canvases", s.handleCanvas)
+	s.mux.HandleFunc("/api/canvases/objects/", s.handleCanvasObjectDetail)
 }
 
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
