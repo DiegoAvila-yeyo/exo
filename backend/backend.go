@@ -16,6 +16,7 @@ import (
 
 	"github.com/DiegoAvila-yeyo/exo/agenthost"
 	"github.com/DiegoAvila-yeyo/exo/appconfig"
+	"github.com/DiegoAvila-yeyo/exo/canvasstore"
 	"github.com/DiegoAvila-yeyo/exo/chatstore"
 	"github.com/DiegoAvila-yeyo/exo/launchdsocket"
 	"github.com/DiegoAvila-yeyo/exo/lifecycle"
@@ -38,6 +39,7 @@ type Config struct {
 	SessionStoreDir  string
 	ChatStoreDir     string
 	PlanningStoreDir string
+	CanvasStoreDir   string
 	Port             int
 	SocketName       string
 	IdleTimeout      time.Duration
@@ -51,11 +53,13 @@ func DefaultConfig() Config {
 	sessionStoreDir, _ := appconfig.SessionStoreDir()
 	chatStoreDir, _ := appconfig.ChatStoreDir()
 	planningStoreDir, _ := appconfig.PlanningStoreDir()
+	canvasStoreDir, _ := appconfig.CanvasStoreDir()
 	return Config{
 		LockPath:         lockPath,
 		SessionStoreDir:  sessionStoreDir,
 		ChatStoreDir:     chatStoreDir,
 		PlanningStoreDir: planningStoreDir,
+		CanvasStoreDir:   canvasStoreDir,
 		Port:             appconfig.DefaultPort,
 		SocketName:       appconfig.SocketName,
 		IdleTimeout:      appconfig.DefaultIdleTimeout,
@@ -123,7 +127,20 @@ func Run(ctx context.Context, config Config) error {
 		}
 	}
 
-	host, err := newAgentHost(context.Background(), manager, planningStore)
+	// Canvas follows the exact same optional-store, built-before-newAgentHost
+	// pattern as Planning above — one *canvasstore.Store instance shared
+	// between the agent's canvas_* tools and termserver's HTTP API.
+	var canvasStore *canvasstore.Store
+	if config.CanvasStoreDir != "" {
+		var csErr error
+		canvasStore, csErr = canvasstore.New(config.CanvasStoreDir)
+		if csErr != nil {
+			_ = lease.Release()
+			return csErr
+		}
+	}
+
+	host, err := newAgentHost(context.Background(), manager, planningStore, canvasStore)
 	if err != nil {
 		_ = lease.Release()
 		return err

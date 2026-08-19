@@ -57,8 +57,17 @@ func newNavigateCell() *navigateCell {
 // (AgentRunner's input) — the three navigation tools check requested names
 // against it before acting, per Round 3's "the agent never invents a
 // destination" rule.
+// Also refreshes canvasCell (canvas_context.go) for the canvas_* tools —
+// one BeginTurn call updates both cells, rather than adding a second
+// per-turn entrypoint. canvasCell.projectID is read from currentRootPath,
+// which SetRootPath has already updated by the time callers reach
+// BeginTurn (see backend.go's runner closure: SetRootPath, then BeginTurn).
 func (h *Host) BeginTurn(humanMessage string) {
 	h.navigateCell.current = &navigateSlot{humanMessage: humanMessage}
+	if h.canvasCell != nil {
+		h.canvasCell.humanMessage = humanMessage
+		h.canvasCell.projectID = h.currentRootPath
+	}
 }
 
 // TakeNavigateAction returns whatever a navigation tool committed during

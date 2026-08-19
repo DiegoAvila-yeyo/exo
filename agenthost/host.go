@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/DiegoAvila-yeyo/exo/appconfig"
+	"github.com/DiegoAvila-yeyo/exo/canvasstore"
 	"github.com/DiegoAvila-yeyo/exo/m8adapter"
 	"github.com/DiegoAvila-yeyo/exo/planningstore"
 	"github.com/DiegoAvila-yeyo/exo/sessions"
@@ -45,6 +46,9 @@ type Host struct {
 	planningStore *planningstore.Store // nil when Planning isn't configured (see New)
 	planningCtx   *planningContext     // shared with the planning_* tools; see planning_context.go
 	navigateCell  *navigateCell        // shared with the planning navigation tools; see planning_navigate.go
+
+	canvasStore *canvasstore.Store // nil when Canvas isn't configured (see New), same fixed-registry/gated-at-Execute pattern as planningStore
+	canvasCell  *canvasCell        // shared with the canvas_* tools; see canvas_context.go
 
 	// gateEnabled and gateOnlySnapshot exist only when EXO_YEYO_GATE is set
 	// (see yeyoGateEnabled). gateOnlySnapshot is an immutable copy holding
@@ -87,7 +91,7 @@ func ValidateEnv() error {
 // "planning is not configured" rather than the tools being conditionally
 // absent (see buildToolRegistry and build_prompt_PLANNING_ROUND2.md's "Tool
 // availability" decision: fixed registry, gated at Execute).
-func New(ctx context.Context, manager *sessions.Manager, planningStore *planningstore.Store) (*Host, error) {
+func New(ctx context.Context, manager *sessions.Manager, planningStore *planningstore.Store, canvasStore *canvasstore.Store) (*Host, error) {
 	if manager == nil {
 		return nil, fmt.Errorf("agenthost: sessions manager is required")
 	}
@@ -114,8 +118,9 @@ func New(ctx context.Context, manager *sessions.Manager, planningStore *planning
 	adapter := m8adapter.New(manager)
 	planningCtx := &planningContext{}
 	navigateCell := newNavigateCell()
+	canvasCell := newCanvasCell()
 	gateEnabled := yeyoGateEnabled()
-	registry := buildToolRegistry(adapter, planningStore, planningCtx, navigateCell, !gateEnabled)
+	registry := buildToolRegistry(adapter, planningStore, planningCtx, navigateCell, canvasStore, canvasCell, !gateEnabled)
 	var mcpClients []*mcp.Client
 	// exp1g Experimento L: MCP servers (GitHub, Jira) register their own
 	// tools directly onto registry, bypassing buildToolRegistry's judge-only
@@ -140,6 +145,8 @@ func New(ctx context.Context, manager *sessions.Manager, planningStore *planning
 		planningStore:    planningStore,
 		planningCtx:      planningCtx,
 		navigateCell:     navigateCell,
+		canvasStore:      canvasStore,
+		canvasCell:       canvasCell,
 		gateEnabled:      gateEnabled,
 	}
 
@@ -418,7 +425,7 @@ func yeyoGateEnabled() bool {
 	return strings.TrimSpace(os.Getenv("EXO_YEYO_GATE")) != ""
 }
 
-func buildToolRegistry(adapter *m8adapter.Adapter, planningStore *planningstore.Store, planningCtx *planningContext, navigateCell *navigateCell, includeAtomTool bool) *nbtool.Registry {
+func buildToolRegistry(adapter *m8adapter.Adapter, planningStore *planningstore.Store, planningCtx *planningContext, navigateCell *navigateCell, canvasStore *canvasstore.Store, canvasCell *canvasCell, includeAtomTool bool) *nbtool.Registry {
 	// exp1g Experimento L: judgment-only mode. When set, the model gets no
 	// tool that lets it act on the task or consult the atom catalog — not
 	// even atom itself. "tasks_file"/"progress" are kept registered only
@@ -462,6 +469,16 @@ func buildToolRegistry(adapter *m8adapter.Adapter, planningStore *planningstore.
 	registry.Register(planningOpenTool{navigateBase})
 	registry.Register(planningCreateBoardAndOpenTool{navigateBase})
 	registry.Register(planningCreatePlanningAndOpenTool{navigateBase})
+
+	// Canvas: same fixed-registry, gated-at-Execute pattern as the planning
+	// tools above — canvasStore may be nil (Canvas not configured for this
+	// deployment), in which case every canvas_* call fails clearly via
+	// canvasToolBase.currentCanvas rather than the tools being conditionally
+	// absent. See canvas_tools.go and canvas_context.go.
+	canvasBase := canvasToolBase{store: canvasStore, cell: canvasCell}
+	registry.Register(canvasListDraftsTool{canvasBase})
+	registry.Register(canvasCreateDraftTool{canvasBase})
+	registry.Register(canvasMaterializeDraftTool{canvasBase})
 	return registry
 }
 

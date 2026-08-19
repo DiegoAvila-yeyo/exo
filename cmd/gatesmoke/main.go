@@ -38,7 +38,7 @@ func main() {
 	}
 
 	manager := sessions.New()
-	host, err := agenthost.New(context.Background(), manager, nil)
+	host, err := agenthost.New(context.Background(), manager, nil, nil)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "agenthost.New:", err)
 		os.Exit(1)
