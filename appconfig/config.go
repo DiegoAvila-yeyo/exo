@@ -63,6 +63,14 @@ func PlanningStoreDir() (string, error) {
 	return filepath.Join(dir, "plannings"), nil
 }
 
+func CanvasStoreDir() (string, error) {
+	dir, err := AppSupportDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "canvases"), nil
+}
+
 func EnvFilePath() (string, error) {
 	dir, err := AppSupportDir()
 	if err != nil {
