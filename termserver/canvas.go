@@ -3,6 +3,8 @@ package termserver
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"strings"
 
@@ -20,6 +22,101 @@ type canvasStore interface {
 type canvasManualEditRequest struct {
 	Payload         json.RawMessage `json:"payload"`
 	ExpectedVersion int             `json:"expected_version"`
+}
+
+// parseMaterializeSlashCommand recognizes the "/materialize <draft-name>"
+// slash command — the unambiguous fallback channel from the Canvas build
+// spec, always resolving to exactly one draft or a clear error, no model
+// inference involved. Case-sensitive on the command itself (slash commands
+// are typed literally), but the draft name match itself
+// (findDraftByNameForMaterialize) is case-insensitive/trimmed like every
+// other exact-name lookup in this codebase.
+func parseMaterializeSlashCommand(message string) (draftName string, ok bool) {
+	const prefix = "/materialize "
+	trimmed := strings.TrimSpace(message)
+	if !strings.HasPrefix(trimmed, prefix) {
+		return "", false
+	}
+	name := strings.TrimSpace(strings.TrimPrefix(trimmed, prefix))
+	if name == "" {
+		return "", false
+	}
+	return name, true
+}
+
+// findDraftByNameForMaterialize mirrors agenthost's findDraftByName exactly
+// (same exact, case-insensitive, hard-fail-on-ambiguous lookup) — a
+// separate copy rather than an import because termserver stays decoupled
+// from agenthost, the same way it already is from every concrete backend
+// via the AgentRunner contract.
+func findDraftByNameForMaterialize(pc canvasstore.ProjectCanvas, name string) (canvasstore.CanvasObject, error) {
+	target := strings.ToLower(strings.TrimSpace(name))
+	var matches []canvasstore.CanvasObject
+	for _, obj := range pc.Objects {
+		if obj.Phase != canvasstore.PhaseDraft {
+			continue
+		}
+		if strings.ToLower(strings.TrimSpace(obj.Name)) == target {
+			matches = append(matches, obj)
+		}
+	}
+	switch len(matches) {
+	case 0:
+		return canvasstore.CanvasObject{}, fmt.Errorf("no draft named %q", name)
+	case 1:
+		return matches[0], nil
+	default:
+		return canvasstore.CanvasObject{}, fmt.Errorf("more than one draft named %q — ambiguous, rename one or use its object_id", name)
+	}
+}
+
+// handleMaterializeSlashCommand resolves and materializes draftName against
+// projectPath directly, bypassing the agent loop entirely (deterministic
+// and fully specified, so there's nothing for the model to decide) — this
+// is why it doesn't go through agentMu or s.runner. Writes a short line to
+// the chat broadcaster and fires NotifyDone so a connected SSE stream sees
+// a visible result, mirroring the normal turn's terminal signal even though
+// no turn ran.
+func (s *Server) handleMaterializeSlashCommand(w http.ResponseWriter, draftName, projectPath string) {
+	if s.canvas == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "canvas is not configured"})
+		return
+	}
+	projectPath = strings.TrimSpace(projectPath)
+	if projectPath == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "no project is open"})
+		return
+	}
+
+	pc, err := s.canvas.Load(projectPath)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	target, err := findDraftByNameForMaterialize(pc, draftName)
+	if err != nil {
+		_, _ = io.WriteString(s.chatBroadcaster, "/materialize: "+err.Error()+"\n")
+		s.chatBroadcaster.NotifyDone()
+		writeJSON(w, http.StatusOK, map[string]string{"status": "accepted"})
+		return
+	}
+	if err := pc.Materialize(target.ObjectID); err != nil {
+		_, _ = io.WriteString(s.chatBroadcaster, "/materialize: "+err.Error()+"\n")
+		s.chatBroadcaster.NotifyDone()
+		writeJSON(w, http.StatusOK, map[string]string{"status": "accepted"})
+		return
+	}
+	if _, err := s.canvas.Save(pc); err != nil {
+		_, _ = io.WriteString(s.chatBroadcaster, "/materialize: "+err.Error()+"\n")
+		s.chatBroadcaster.NotifyDone()
+		writeJSON(w, http.StatusOK, map[string]string{"status": "accepted"})
+		return
+	}
+
+	s.recordActivity()
+	_, _ = io.WriteString(s.chatBroadcaster, "materialized \""+target.Name+"\" — now visible on the Canvas\n")
+	s.chatBroadcaster.NotifyDone()
+	writeJSON(w, http.StatusOK, map[string]string{"status": "accepted"})
 }
 
 // handleCanvas serves GET /api/canvases?project_path=... — the current

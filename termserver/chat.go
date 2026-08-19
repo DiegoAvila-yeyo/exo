@@ -38,7 +38,25 @@ import (
 // also non-nil: a tool's persisted side effect (a Board/Planning actually
 // created) already happened by the time it committed, and a later,
 // unrelated failure in the rest of the turn must not make it disappear.
-type AgentRunner func(ctx context.Context, input string, history []api.Message, projectPath string, planningID string, boardID string) ([]api.Message, *NavigateAction, error)
+// The returned *CanvasSuggestion (Canvas build) is non-nil when this turn's
+// tool activity left exactly one new draft Canvas object the agent's own
+// reply signals as well-defined enough to materialize — see
+// CanvasSuggestion's doc comment. Like NavigateAction, it must be checked
+// and delivered regardless of whether err is also non-nil.
+type AgentRunner func(ctx context.Context, input string, history []api.Message, projectPath string, planningID string, boardID string) ([]api.Message, *NavigateAction, *CanvasSuggestion, error)
+
+// CanvasSuggestion is the contextual "materialize this?" signal — the
+// button affordance from the Canvas build spec is never the only way to
+// materialize a draft (natural language and /materialize both work
+// independent of it), it only appears once the backend has itself detected
+// a draft worth surfacing. Detection lives in the concrete AgentRunner
+// (backend.go), not here: termserver stays decoupled from how "well-defined
+// enough" is decided, the same way it already is from agenthost via the
+// AgentRunner contract.
+type CanvasSuggestion struct {
+	ObjectID string
+	Name     string
+}
 
 // NavigateAction mirrors agenthost.NavigateAction's shape (deliberately not
 // reused directly — termserver stays decoupled from agenthost the same way
@@ -148,10 +166,22 @@ type chatNavigateEvent struct {
 	BoardName    string `json:"board_name,omitempty"`
 }
 
+// chatCanvasSuggestEvent is the wire shape of a CanvasSuggestion, delivered
+// over SSE — fanned out to every connected tab the same way navigate is
+// (Round 3 explicitly didn't add per-client routing, and there's no
+// per-tab identity reason to add it here either: any tab looking at this
+// project's Canvas benefits from knowing a draft is ready).
+type chatCanvasSuggestEvent struct {
+	Type     string `json:"type"`
+	ObjectID string `json:"object_id"`
+	Name     string `json:"name"`
+}
+
 type chatSubscription struct {
-	output   chan string
-	done     chan struct{}
-	navigate chan chatNavigateEvent
+	output        chan string
+	done          chan struct{}
+	navigate      chan chatNavigateEvent
+	canvasSuggest chan chatCanvasSuggestEvent
 }
 
 type chatBroadcaster struct {
@@ -226,16 +256,17 @@ func (b *chatBroadcaster) Replay(output chan string) {
 	}
 }
 
-func (b *chatBroadcaster) Subscribe() (chan string, chan struct{}, chan chatNavigateEvent) {
+func (b *chatBroadcaster) Subscribe() (chan string, chan struct{}, chan chatNavigateEvent, chan chatCanvasSuggestEvent) {
 	sub := &chatSubscription{
-		output:   make(chan string, 1024),
-		done:     make(chan struct{}, 1),
-		navigate: make(chan chatNavigateEvent, 4),
+		output:        make(chan string, 1024),
+		done:          make(chan struct{}, 1),
+		navigate:      make(chan chatNavigateEvent, 4),
+		canvasSuggest: make(chan chatCanvasSuggestEvent, 4),
 	}
 	b.mu.Lock()
 	b.subs[sub.output] = sub
 	b.mu.Unlock()
-	return sub.output, sub.done, sub.navigate
+	return sub.output, sub.done, sub.navigate, sub.canvasSuggest
 }
 
 func (b *chatBroadcaster) Unsubscribe(output chan string) {
@@ -264,6 +295,19 @@ func (b *chatBroadcaster) NotifyNavigate(event chatNavigateEvent) {
 	for _, sub := range b.subs {
 		select {
 		case sub.navigate <- event:
+		default:
+		}
+	}
+	b.mu.RUnlock()
+}
+
+// NotifyCanvasSuggest mirrors NotifyNavigate exactly, for
+// chatCanvasSuggestEvent.
+func (b *chatBroadcaster) NotifyCanvasSuggest(event chatCanvasSuggestEvent) {
+	b.mu.RLock()
+	for _, sub := range b.subs {
+		select {
+		case sub.canvasSuggest <- event:
 		default:
 		}
 	}
@@ -380,6 +424,20 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		sessionLoaded = true
 	}
 
+	// /materialize <draft-name> is the unambiguous slash-command fallback
+	// channel (Canvas build spec) — always resolves to exactly one draft or
+	// a clear error, no model inference involved, so it's handled here,
+	// before the message ever reaches the agent loop, the same way
+	// resolvePlanningContext validates pre-turn rather than inside a turn.
+	if draftName, ok := parseMaterializeSlashCommand(body.Message); ok {
+		projectPath := body.ProjectPath
+		if projectPath == "" {
+			projectPath = session.ProjectPath
+		}
+		s.handleMaterializeSlashCommand(w, draftName, projectPath)
+		return
+	}
+
 	planningID, boardID, err := resolvePlanningContext(s.planning, session.PlanningID, session.BoardID, body.PlanningID, body.BoardID)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -423,7 +481,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		// constructs one) for a value that only the yeyo gate's telemetry
 		// (agenthost/gate_telemetry.go, EXO_YEYO_GATE) currently reads.
 		runCtx := agenthost.ContextWithSessionID(context.Background(), sess.ID)
-		updated, navAction, err := s.runner(runCtx, message, sess.Messages, sess.ProjectPath, planningID, boardID)
+		updated, navAction, canvasSuggestion, err := s.runner(runCtx, message, sess.Messages, sess.ProjectPath, planningID, boardID)
 		if err != nil {
 			_, _ = io.WriteString(s.chatBroadcaster, "error: "+err.Error()+"\n")
 		}
@@ -440,6 +498,13 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 				PlanningName: navAction.PlanningName,
 				BoardID:      navAction.BoardID,
 				BoardName:    navAction.BoardName,
+			})
+		}
+		if canvasSuggestion != nil {
+			s.chatBroadcaster.NotifyCanvasSuggest(chatCanvasSuggestEvent{
+				Type:     "canvas_suggest",
+				ObjectID: canvasSuggestion.ObjectID,
+				Name:     canvasSuggestion.Name,
 			})
 		}
 		if persist {
@@ -479,7 +544,7 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
 
-	output, done, navigate := s.chatBroadcaster.Subscribe()
+	output, done, navigate, canvasSuggest := s.chatBroadcaster.Subscribe()
 	defer s.chatBroadcaster.Unsubscribe(output)
 	s.chatBroadcaster.Replay(output)
 
@@ -518,6 +583,8 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 		case <-done:
 			s.writeSSE(w, chatStateEvent{Type: "done"})
 		case event := <-navigate:
+			s.writeSSE(w, event)
+		case event := <-canvasSuggest:
 			s.writeSSE(w, event)
 		case <-approvalTicker.C:
 			if seq, prompt, detail, sessionID, active := s.approval.snapshot(); active && seq != lastApprovalSeq {

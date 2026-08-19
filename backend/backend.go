@@ -199,9 +199,9 @@ func Run(ctx context.Context, config Config) error {
 	})
 
 	var server *termserver.Server
-	runner := func(ctx context.Context, input string, history []api.Message, projectPath string, planningID string, boardID string) ([]api.Message, *termserver.NavigateAction, error) {
+	runner := func(ctx context.Context, input string, history []api.Message, projectPath string, planningID string, boardID string) ([]api.Message, *termserver.NavigateAction, *termserver.CanvasSuggestion, error) {
 		if server == nil {
-			return nil, nil, fmt.Errorf("termserver agent runner invoked before server initialization")
+			return nil, nil, nil, fmt.Errorf("termserver agent runner invoked before server initialization")
 		}
 		// Swap in this session's history and move the agent into whatever
 		// project it picked (rereading that project's own rules) before the
@@ -216,7 +216,7 @@ func Run(ctx context.Context, config Config) error {
 		// before making this mutable Host state instead of threading it
 		// per-call).
 		if err := host.SetRootPath(projectPath); err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		host.SetMessages(history)
 		host.SetPlanningContext(planningID, boardID)
@@ -226,6 +226,28 @@ func Run(ctx context.Context, config Config) error {
 		// unconditionally — see Host.RefreshCanvasCentro's doc comment for
 		// why this can't piggyback on SetRootPath's change-guarded rebuild.
 		host.RefreshCanvasCentro()
+
+		// Canvas-suggestion detection (Canvas build spec's "contextual
+		// button" channel): snapshot the project's draft object IDs before
+		// the turn runs, diff against after — a turn that leaves exactly one
+		// new draft is unambiguous enough to surface a materialize button
+		// for; zero or more than one is not (never guess which one), so no
+		// suggestion is made either way. This is a coarse but honest proxy
+		// for "the agent's own reply signals this draft is well-defined" —
+		// canvas_create_draft is only ever called once that threshold has
+		// been crossed (see its tool description in agenthost/canvas_tools.go).
+		var beforeDraftIDs map[string]bool
+		if canvasStore != nil && projectPath != "" {
+			if before, err := canvasStore.Load(projectPath); err == nil {
+				beforeDraftIDs = make(map[string]bool, len(before.Objects))
+				for _, obj := range before.Objects {
+					if obj.Phase == canvasstore.PhaseDraft {
+						beforeDraftIDs[obj.ObjectID] = true
+					}
+				}
+			}
+		}
+
 		err := host.Run(ctx, input, server.ChatOutputWriter())
 		// Read back whatever a navigation tool committed regardless of err
 		// — see AgentRunner's doc comment (termserver/chat.go) and
@@ -240,7 +262,26 @@ func Run(ctx context.Context, config Config) error {
 				BoardName:    a.BoardName,
 			}
 		}
-		return host.Messages(), nav, err
+
+		var canvasSuggestion *termserver.CanvasSuggestion
+		if beforeDraftIDs != nil {
+			if after, loadErr := canvasStore.Load(projectPath); loadErr == nil {
+				var newDrafts []canvasstore.CanvasObject
+				for _, obj := range after.Objects {
+					if obj.Phase == canvasstore.PhaseDraft && !beforeDraftIDs[obj.ObjectID] {
+						newDrafts = append(newDrafts, obj)
+					}
+				}
+				if len(newDrafts) == 1 {
+					canvasSuggestion = &termserver.CanvasSuggestion{
+						ObjectID: newDrafts[0].ObjectID,
+						Name:     newDrafts[0].Name,
+					}
+				}
+			}
+		}
+
+		return host.Messages(), nav, canvasSuggestion, err
 	}
 
 	termserverOpts := []termserver.Option{
