@@ -172,3 +172,139 @@ func TestCanvasListDraftsOnlyListsDrafts(t *testing.T) {
 		t.Fatalf("canvas_list_drafts output = %+v, want only the still-draft object", drafts)
 	}
 }
+
+func mustEditObjectInput(t *testing.T, objectID string, payload map[string]any) string {
+	t.Helper()
+	data, err := json.Marshal(map[string]any{"object_id": objectID, "payload": payload})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	return string(data)
+}
+
+// TestCanvasEditObjectVersionsMaterializedObject is the direct regression
+// check for QA finding #1: the mini-chat previously had no tool that could
+// mutate an already-materialized object, so canvas_edit_object needs to
+// version it via AppendAtom's supersedes chain — never mutate in place —
+// exactly like the manual-edit HTTP path.
+func TestCanvasEditObjectVersionsMaterializedObject(t *testing.T) {
+	base, store := newTestCanvasBase(t)
+	pc, err := store.Load("/proj")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	obj, err := pc.AddDraft("diagram", "Auth Flow", json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("AddDraft: %v", err)
+	}
+	if err := pc.Materialize(obj.ObjectID); err != nil {
+		t.Fatalf("Materialize: %v", err)
+	}
+	if _, err := store.Save(pc); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	tool := canvasEditObjectTool{base}
+	msg, isErr := tool.Execute(context.Background(), mustEditObjectInput(t, obj.ObjectID, map[string]any{
+		"nodes": []map[string]any{{"id": "n1", "label": "User"}},
+	}))
+	if isErr {
+		t.Fatalf("canvas_edit_object failed: %s", msg)
+	}
+
+	first, err := store.Load("/proj")
+	if err != nil {
+		t.Fatalf("Load (after first edit): %v", err)
+	}
+	firstAtom, ok := first.CurrentAtom(obj.ObjectID)
+	if !ok {
+		t.Fatalf("CurrentAtom missing after first edit")
+	}
+	if firstAtom.Supersedes != "" {
+		t.Fatalf("first atom Supersedes = %q, want empty", firstAtom.Supersedes)
+	}
+
+	msg, isErr = tool.Execute(context.Background(), mustEditObjectInput(t, obj.ObjectID, map[string]any{
+		"nodes": []map[string]any{{"id": "n1", "label": "User (renamed)"}},
+	}))
+	if isErr {
+		t.Fatalf("canvas_edit_object (second edit) failed: %s", msg)
+	}
+
+	second, err := store.Load("/proj")
+	if err != nil {
+		t.Fatalf("Load (after second edit): %v", err)
+	}
+	if len(second.Atoms) != 2 {
+		t.Fatalf("Atoms after two edits = %d, want 2 (first retained, not mutated)", len(second.Atoms))
+	}
+	secondAtom, ok := second.CurrentAtom(obj.ObjectID)
+	if !ok || secondAtom.Supersedes != firstAtom.AtomID {
+		t.Fatalf("second atom Supersedes = %q (ok=%v), want %q", secondAtom.Supersedes, ok, firstAtom.AtomID)
+	}
+}
+
+func TestCanvasEditObjectRefusesDraftOrDeleted(t *testing.T) {
+	base, store := newTestCanvasBase(t)
+	pc, err := store.Load("/proj")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	draftObj, err := pc.AddDraft("diagram", "Still Draft", json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("AddDraft: %v", err)
+	}
+	if _, err := store.Save(pc); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	tool := canvasEditObjectTool{base}
+	_, isErr := tool.Execute(context.Background(), mustEditObjectInput(t, draftObj.ObjectID, map[string]any{"nodes": []any{}}))
+	if !isErr {
+		t.Fatalf("expected error editing a still-draft object")
+	}
+
+	_, isErr = tool.Execute(context.Background(), mustEditObjectInput(t, "object-does-not-exist", map[string]any{"nodes": []any{}}))
+	if !isErr {
+		t.Fatalf("expected error editing an unknown object_id")
+	}
+}
+
+func TestValidateDiagramPayloadRejectsDanglingEdgeReference(t *testing.T) {
+	valid := json.RawMessage(`{"nodes":[{"id":"a"},{"id":"b"}],"edges":[{"id":"e1","from":"a","to":"b"}]}`)
+	if err := validateDiagramPayload(valid); err != nil {
+		t.Fatalf("validateDiagramPayload(valid) = %v, want nil", err)
+	}
+
+	dangling := json.RawMessage(`{"nodes":[{"id":"a"}],"edges":[{"id":"e1","from":"a","to":"does-not-exist"}]}`)
+	if err := validateDiagramPayload(dangling); err == nil {
+		t.Fatalf("validateDiagramPayload(dangling) = nil, want error")
+	}
+}
+
+func TestCanvasEditObjectRejectsDanglingDiagramEdge(t *testing.T) {
+	base, store := newTestCanvasBase(t)
+	pc, err := store.Load("/proj")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	obj, err := pc.AddDraft("diagram", "Auth Flow", json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("AddDraft: %v", err)
+	}
+	if err := pc.Materialize(obj.ObjectID); err != nil {
+		t.Fatalf("Materialize: %v", err)
+	}
+	if _, err := store.Save(pc); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	tool := canvasEditObjectTool{base}
+	_, isErr := tool.Execute(context.Background(), mustEditObjectInput(t, obj.ObjectID, map[string]any{
+		"nodes": []map[string]any{{"id": "a"}},
+		"edges": []map[string]any{{"id": "e1", "from": "a", "to": "missing"}},
+	}))
+	if !isErr {
+		t.Fatalf("expected error editing a diagram object with a dangling edge reference")
+	}
+}

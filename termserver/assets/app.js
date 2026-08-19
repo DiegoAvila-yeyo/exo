@@ -1625,6 +1625,13 @@
   function renderCanvasView() {
     refs.canvasObjects.innerHTML = "";
     const objects = materializedCanvasObjects();
+    // Toggled from JS rather than a CSS :empty ~ sibling rule: the empty
+    // state markup sits *before* #canvas-objects in the DOM (index.html),
+    // and sibling combinators only ever select later siblings, so a
+    // :empty ~ rule here could never match — hidden/visible has to be
+    // driven explicitly, the same way every other conditional panel in
+    // this app (approval-banner, chat-feedback, ...) already does it.
+    refs.canvasEmptyState.hidden = objects.length > 0;
     objects.forEach(function (obj) {
       const card = document.createElement("div");
       card.className = "canvas-object-card";
@@ -1662,11 +1669,45 @@
     });
   }
 
+  // autoLayoutNodes assigns a simple left-to-right, wrapping grid position
+  // to any node missing explicit x/y. The model's payload today only ever
+  // emits id/label/type per node — canvas_create_draft/canvas_edit_object's
+  // schemas don't ask for layout coordinates, and asking an LLM for
+  // precise, non-overlapping pixel positions for an arbitrary graph is a
+  // known-fragile thing to rely on — so every node used to default to the
+  // same (0,0) box and stack exactly on top of each other. A node that
+  // *does* specify x/y is left untouched: this is only ever a fallback,
+  // never an override, so a human's (or a future model's) deliberate
+  // layout still wins.
+  function autoLayoutNodes(nodes) {
+    const defaultW = 160, defaultH = 60, colGap = 40, rowGap = 30, cols = 3, margin = 20;
+    let col = 0, row = 0;
+    return nodes.map(function (node) {
+      const hasPosition = typeof node.x === "number" && typeof node.y === "number";
+      if (hasPosition) {
+        return node;
+      }
+      const positioned = Object.assign({}, node, {
+        x: margin + col * (defaultW + colGap),
+        y: margin + row * (defaultH + rowGap),
+        w: node.w || defaultW,
+        h: node.h || defaultH,
+      });
+      col += 1;
+      if (col >= cols) {
+        col = 0;
+        row += 1;
+      }
+      return positioned;
+    });
+  }
+
   // renderDiagramStage renders a diagram payload (§6 of the build plan:
   // nodes/edges/groups/layout/style_tokens) as absolutely-positioned node
   // divs over an SVG edge overlay, inside a stage sized from
-  // layout.width/height. style tokens map 1:1 to fixed CSS classes — never
-  // arbitrary inline colors.
+  // layout.width/height, or derived from the laid-out nodes when the
+  // payload doesn't specify one. style tokens map 1:1 to fixed CSS
+  // classes — never arbitrary inline colors.
   function renderDiagramStage(payload) {
     const stage = document.createElement("div");
     stage.className = "canvas-diagram-stage";
@@ -1674,9 +1715,19 @@
       stage.style.height = "80px";
       return stage;
     }
-    const layout = payload.layout || {};
-    const width = layout.width || 400;
-    const height = layout.height || 240;
+    const nodes = autoLayoutNodes(payload.nodes || []);
+    const explicitLayout = payload.layout || {};
+    let width = explicitLayout.width;
+    let height = explicitLayout.height;
+    if (!width || !height) {
+      let maxX = 0, maxY = 0;
+      nodes.forEach(function (node) {
+        maxX = Math.max(maxX, (node.x || 0) + (node.w || 160));
+        maxY = Math.max(maxY, (node.y || 0) + (node.h || 60));
+      });
+      width = width || Math.max(maxX + 20, 300);
+      height = height || Math.max(maxY + 20, 160);
+    }
     stage.style.width = width + "px";
     stage.style.height = height + "px";
 
@@ -1705,7 +1756,7 @@
     svg.setAttribute("height", String(height));
 
     const nodeById = {};
-    (payload.nodes || []).forEach(function (node) { nodeById[node.id] = node; });
+    nodes.forEach(function (node) { nodeById[node.id] = node; });
 
     (payload.edges || []).forEach(function (edge) {
       const from = nodeById[edge.from];
@@ -1723,7 +1774,7 @@
     });
     stage.appendChild(svg);
 
-    (payload.nodes || []).forEach(function (node) {
+    nodes.forEach(function (node) {
       const el = document.createElement("div");
       el.className = "canvas-node" + (node.style ? " canvas-node--" + node.style : "");
       el.style.left = (node.x || 0) + "px";

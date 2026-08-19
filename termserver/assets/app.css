@@ -1031,10 +1031,19 @@ button:disabled {
   overflow: auto;
 }
 
+/* Visibility is driven from JS (renderCanvasView toggles the hidden
+   attribute) rather than a CSS :empty ~ sibling rule — #canvas-empty-state
+   sits *before* #canvas-objects in the DOM (index.html), and sibling
+   combinators only ever select later siblings, so that rule could never
+   have matched. */
 .canvas-empty-state {
   margin: auto;
   max-width: 360px;
   text-align: center;
+}
+
+.canvas-empty-state[hidden] {
+  display: none;
 }
 
 .canvas-objects {
@@ -1044,14 +1053,6 @@ button:disabled {
 }
 
 .canvas-objects:empty {
-  display: none;
-}
-
-.canvas-objects:empty ~ .canvas-empty-state {
-  display: block;
-}
-
-.canvas-objects:not(:empty) ~ .canvas-empty-state {
   display: none;
 }
 

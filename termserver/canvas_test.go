@@ -165,3 +165,54 @@ func itoa(n int) string {
 	data, _ := json.Marshal(n)
 	return string(data)
 }
+
+// TestCanvasManualEditRejectsDanglingDiagramEdge is the direct regression
+// check for QA finding #5: a manual JSON edit with an edge referencing a
+// node id that doesn't exist in the same payload must be rejected before
+// it's persisted, not silently saved and dropped at render time.
+func TestCanvasManualEditRejectsDanglingDiagramEdge(t *testing.T) {
+	store := newFakeStore()
+	cs := newTestCanvasStore(t)
+	_, server, httpServer := newTestServer(t, store, WithCanvasStore(cs))
+	client, csrf := bootstrapClient(t, httpServer, server)
+
+	projectPath := "/proj"
+	pc, err := cs.Load(projectPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	obj, err := pc.AddDraft("diagram", "My Diagram", json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("AddDraft: %v", err)
+	}
+	if err := pc.Materialize(obj.ObjectID); err != nil {
+		t.Fatalf("Materialize: %v", err)
+	}
+	saved, err := cs.Save(pc)
+	if err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	patchURL := httpServer.URL + "/api/canvases/objects/" + obj.ObjectID +
+		"?project_path=" + url.QueryEscape(projectPath) + "&csrf_token=" + url.QueryEscape(csrf)
+	body := `{"payload":{"nodes":[{"id":"a"}],"edges":[{"id":"e1","from":"a","to":"missing"}]},"expected_version":` + itoa(saved.Version) + `}`
+	req := newJSONRequest(t, http.MethodPatch, patchURL, body)
+	req.Header.Set("Origin", allowedOrigin(server))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := client.Do(req)
+	if err != nil {
+		t.Fatalf("PATCH failed: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("PATCH (dangling edge) status = %d, want %d", resp.StatusCode, http.StatusBadRequest)
+	}
+
+	reloaded, err := cs.Load(projectPath)
+	if err != nil {
+		t.Fatalf("Load (after rejected edit): %v", err)
+	}
+	if len(reloaded.Atoms) != 0 {
+		t.Fatalf("Atoms after rejected edit = %d, want 0 (nothing should have been persisted)", len(reloaded.Atoms))
+	}
+}

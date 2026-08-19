@@ -222,6 +222,18 @@ func (s *Server) handleCanvasObjectPatch(w http.ResponseWriter, r *http.Request,
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "stale_version"})
 		return
 	}
+	// Validate before writing — a manual JSON edit is free-form (unlike a
+	// tool call's schema-enforced input), so this is the one place a typo
+	// like an edge referencing a renamed/deleted node id can be caught
+	// before it's persisted. Silently dropping such an edge at render time
+	// (see app.js's renderDiagramStage) would hide the mistake instead of
+	// surfacing it to whoever made the edit.
+	if obj := findCanvasObjectByID(pc, objectID); obj != nil && obj.Type == "diagram" {
+		if err := validateDiagramPayload(req.Payload); err != nil {
+			http.Error(w, "invalid diagram payload: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
 	if _, err := pc.AppendAtom(objectID, req.Payload); err != nil {
 		if errors.Is(err, canvasstore.ErrObjectNotFound) {
 			http.Error(w, "object not found", http.StatusNotFound)
@@ -294,4 +306,59 @@ func (s *Server) handleCanvasObjectActivation(w http.ResponseWriter, r *http.Req
 	}
 	s.recordActivity()
 	writeJSON(w, http.StatusOK, saved)
+}
+
+func findCanvasObjectByID(pc canvasstore.ProjectCanvas, objectID string) *canvasstore.CanvasObject {
+	for i := range pc.Objects {
+		if pc.Objects[i].ObjectID == objectID {
+			return &pc.Objects[i]
+		}
+	}
+	return nil
+}
+
+// diagramNodeShape/diagramEdgeShape/diagramPayloadShape and
+// validateDiagramPayload mirror agenthost/canvas_tools.go's copies exactly
+// — a separate copy rather than a shared import because termserver stays
+// decoupled from agenthost, the same way findDraftByNameForMaterialize
+// already duplicates agenthost's findDraftByName instead of importing it.
+type diagramNodeShape struct {
+	ID string `json:"id"`
+}
+
+type diagramEdgeShape struct {
+	ID   string `json:"id"`
+	From string `json:"from"`
+	To   string `json:"to"`
+}
+
+type diagramPayloadShape struct {
+	Nodes []diagramNodeShape `json:"nodes"`
+	Edges []diagramEdgeShape `json:"edges"`
+}
+
+// validateDiagramPayload rejects a diagram payload whose edges reference a
+// node id that doesn't exist among its own nodes. A payload that doesn't
+// even parse as {nodes, edges} is left alone — not this function's job to
+// diagnose a JSON-shape problem.
+func validateDiagramPayload(payload json.RawMessage) error {
+	var shape diagramPayloadShape
+	if err := json.Unmarshal(payload, &shape); err != nil {
+		return nil
+	}
+	ids := make(map[string]bool, len(shape.Nodes))
+	for _, n := range shape.Nodes {
+		if n.ID != "" {
+			ids[n.ID] = true
+		}
+	}
+	for _, e := range shape.Edges {
+		if e.From != "" && !ids[e.From] {
+			return fmt.Errorf("edge %q references unknown node id %q (from)", e.ID, e.From)
+		}
+		if e.To != "" && !ids[e.To] {
+			return fmt.Errorf("edge %q references unknown node id %q (to)", e.ID, e.To)
+		}
+	}
+	return nil
 }

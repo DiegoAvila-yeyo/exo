@@ -283,3 +283,138 @@ func findObjectByID(pc canvasstore.ProjectCanvas, objectID string) *canvasstore.
 	}
 	return nil
 }
+
+// --- canvas_edit_object ---
+//
+// The floating panel's mini-chat is supposed to let the AI edit an
+// already-materialized object directly, versioned via supersedes — before
+// this tool existed, canvas_create_draft/canvas_materialize_draft left no
+// way to mutate a materialized object's content at all, so the mini-chat
+// could only ever propose starting a brand new draft. This closes that gap
+// by going through the exact same write path (AppendAtom, never mutating
+// an existing atom) that the manual-edit HTTP PATCH endpoint uses
+// (termserver/canvas.go's handleCanvasObjectPatch) — one write path for
+// both edit surfaces, per the build spec.
+
+type canvasEditObjectTool struct{ canvasToolBase }
+
+func (t canvasEditObjectTool) Definition() api.ToolDef {
+	return api.ToolDef{
+		Name: "canvas_edit_object",
+		Description: "Edit an already-materialized Canvas object's content — versions it as a new " +
+			"atom (the previous version is retained, never mutated), exactly like a human's manual " +
+			"edit through the floating panel. Only works on an object whose phase is already " +
+			"\"materialized\" (use canvas_materialize_draft first if it's still a draft). payload " +
+			"replaces the object's current content in full — read the object's current payload from " +
+			"the conversation context (materialized objects that are active are already in your " +
+			"system prompt) before editing, so you don't drop fields the human didn't ask you to " +
+			"change.",
+		InputSchema: map[string]any{
+			"object_id": map[string]any{
+				"type":        "string",
+				"description": "The exact object_id of the materialized object to edit.",
+			},
+			"payload": map[string]any{
+				"type":        "object",
+				"description": "The full replacement payload for this object (e.g. a diagram's complete nodes/edges/groups/layout).",
+			},
+		},
+		Required: []string{"object_id", "payload"},
+	}
+}
+
+func (t canvasEditObjectTool) Execute(_ context.Context, rawInput string) (string, bool) {
+	var in struct {
+		ObjectID string          `json:"object_id"`
+		Payload  json.RawMessage `json:"payload"`
+	}
+	if err := json.Unmarshal([]byte(rawInput), &in); err != nil {
+		return fmt.Sprintf("invalid tool input: %v", err), true
+	}
+	objectID := strings.TrimSpace(in.ObjectID)
+	if objectID == "" {
+		return "\"object_id\" is required", true
+	}
+	if len(in.Payload) == 0 {
+		return "\"payload\" is required", true
+	}
+	if t.store == nil {
+		return "canvas is not configured", true
+	}
+	if t.cell.projectID == "" {
+		return "no project is open — the canvas only works while the user has a project selected", true
+	}
+
+	var edited canvasstore.CanvasObject
+	_, err := t.saveWithRetry(func(pc *canvasstore.ProjectCanvas) error {
+		obj := findObjectByID(*pc, objectID)
+		if obj == nil {
+			return fmt.Errorf("no object with object_id %q", objectID)
+		}
+		if obj.Phase != canvasstore.PhaseMaterialized {
+			return fmt.Errorf("object %q is not materialized (phase: %s) — canvas_edit_object only works on materialized objects", objectID, obj.Phase)
+		}
+		if obj.Type == "diagram" {
+			if err := validateDiagramPayload(in.Payload); err != nil {
+				return fmt.Errorf("invalid diagram payload: %w", err)
+			}
+		}
+		if _, err := pc.AppendAtom(objectID, in.Payload); err != nil {
+			return err
+		}
+		edited = *findObjectByID(*pc, objectID)
+		return nil
+	})
+	if err != nil {
+		return err.Error(), true
+	}
+	return fmt.Sprintf("edited %q — new version saved", edited.Name), false
+}
+
+// diagramNodeShape/diagramEdgeShape/diagramPayloadShape are the minimal
+// subset of the §6 diagram payload schema needed to validate edge
+// references — not a full schema, just enough to catch a dangling
+// edge.from/edge.to before it silently disappears from the render (the
+// frontend's renderDiagramStage no-ops on an edge whose endpoints don't
+// resolve, per app.js).
+type diagramNodeShape struct {
+	ID string `json:"id"`
+}
+
+type diagramEdgeShape struct {
+	ID   string `json:"id"`
+	From string `json:"from"`
+	To   string `json:"to"`
+}
+
+type diagramPayloadShape struct {
+	Nodes []diagramNodeShape `json:"nodes"`
+	Edges []diagramEdgeShape `json:"edges"`
+}
+
+// validateDiagramPayload rejects a diagram payload whose edges reference a
+// node id that doesn't exist among its own nodes. A payload that doesn't
+// even parse as {nodes, edges} is left alone here — that's a JSON-shape
+// problem the caller's own JSON validation already would have caught
+// earlier in the request, not this function's job to diagnose.
+func validateDiagramPayload(payload json.RawMessage) error {
+	var shape diagramPayloadShape
+	if err := json.Unmarshal(payload, &shape); err != nil {
+		return nil
+	}
+	ids := make(map[string]bool, len(shape.Nodes))
+	for _, n := range shape.Nodes {
+		if n.ID != "" {
+			ids[n.ID] = true
+		}
+	}
+	for _, e := range shape.Edges {
+		if e.From != "" && !ids[e.From] {
+			return fmt.Errorf("edge %q references unknown node id %q (from)", e.ID, e.From)
+		}
+		if e.To != "" && !ids[e.To] {
+			return fmt.Errorf("edge %q references unknown node id %q (to)", e.ID, e.To)
+		}
+	}
+	return nil
+}
