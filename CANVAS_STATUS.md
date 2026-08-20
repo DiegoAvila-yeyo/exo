@@ -20,6 +20,9 @@ duplicarlo.
    verdad de qué se decidió construir**; los 5 documentos de arriba son el razonamiento detrás.
 7. `canvas_live_qa_findings.md` — 6 hallazgos de la primera prueba en vivo.
 8. `canvas_qa_retest_checklist.md` — checklist para reverificar los 4 fixes del commit `21ad82b`.
+9. `canvas_activation_gap_findings.md` — hallazgo del retest 2026-08-20: el anclaje nunca se activó
+   para ningún objeto (falta el disparador, no el mecanismo), con 3 opciones de arreglo y
+   recomendación.
 
 ## Construido
 
@@ -34,6 +37,34 @@ duplicarlo.
 - [x] Task 8 — fixes de QA en vivo: `canvas_edit_object`, auto-layout, validación de edges,
       empty-state (`21ad82b`) — **verificado en vivo por el build session, retest formal
       (`canvas_qa_retest_checklist.md`) todavía sin correr por el usuario**
+- [x] Task 9 — cierre del gap de anclaje (`canvas_activation_gap_findings.md`, opción B): tools de
+      agente `canvas_activate_object`/`canvas_deactivate_object` (reusan `SetActivation` tal cual) +
+      toggle real en el panel flotante conectado a `/activate`/`/deactivate` — el badge de solo
+      lectura y el endpoint HTTP ya existían, esto agrega el disparador que faltaba. `go build`/`go
+      test` en verde, tests nuevos para materializado-ok / draft-o-deleted-falla /
+      ya-inactivo-es-no-op / retry en conflicto CAS. **Verificado en vivo** — el fix llevó al
+      hallazgo #8 (abajo), atacado en Task 10.
+- [x] Task 10 — scoping real del mini-chat (bug #8, arreglado directo en esta sesión, sin build
+      session aparte): `canvasCell.scopedObjectID` + `checkScope` (`agenthost/canvas_context.go`),
+      `Host.BeginTurn` ahora recibe el object_id escopado, threadeado desde
+      `POST /api/chat`'s nuevo campo `canvas_object_id` (`termserver/chat.go`) hasta
+      `backend.go`'s runner. Los 5 tools (`canvas_edit_object`, `canvas_activate_object`,
+      `canvas_deactivate_object`, `canvas_create_draft`, `canvas_materialize_draft`) rechazan
+      actuar sobre cualquier objeto que no sea el escopado, cuando hay un scope activo. El mini-chat
+      (`app.js`) ahora manda `canvas_object_id` en cada mensaje — mismo principio que
+      `planning_id`/`board_id`: el navegador establece el contexto, no el modelo. `go build`/`go
+      test` en verde, 6 tests nuevos (`TestCanvas*RejectsWhenScoped*`,
+      `TestCanvasEditObjectAllowedWhenScopedToSameObject`). **Verificado en vivo** — el
+      scoping sí apuntó al objeto correcto, lo que reveló #9 (abajo).
+- [x] Task 11 — `dynamicCentro` nunca anclaba el `Payload` original de un objeto materializado
+      pero jamás editado (cero átomos -> `CurrentAtom` devuelve ok=false -> se saltaba en
+      silencio, aunque estuviera Active). Causa raíz real de la fabricación en #9: la primera
+      edición de cualquier objeto siempre era ciega. Fix en `agenthost/canvas_centro.go`: fallback
+      a `obj.Payload` cuando no hay átomo, mismo patrón que ya usa `app.js`
+      (`currentAtomBody(...) || obj.payload`), ahora también del lado servidor. Test nuevo
+      `TestDynamicCentroFallsBackToPayloadWhenNoAtomExists`. `go build`/`go test` en verde.
+      **Verificado en vivo** — diagrama "CI/CD Pipeline" recién materializado y activado, primera
+      edición preservó los 10 nodos originales completos, solo cambió el label pedido.
 
 ## Verificado en vivo (prueba manual del 2026-08-19)
 
@@ -58,10 +89,36 @@ Encontró los 6 hallazgos de `canvas_live_qa_findings.md`. El build session repo
 
 Usar `canvas_qa_retest_checklist.md` paso a paso — ninguno de estos se da por cerrado hasta correr
 ese checklist:
-- [ ] #1 — `canvas_edit_object` (edición vía IA de objeto materializado, versiona con `supersedes`)
-- [ ] #2 — auto-layout de diagramas (nodos ya no se apilan en `(0,0)`)
-- [ ] #5 — referencias de edge rotas se rechazan al guardar (manual y vía tool)
-- [ ] #6 — placeholder de canvas vacío se oculta correctamente
+- [x] #1 — `canvas_edit_object` (edición vía IA de objeto materializado, versiona con `supersedes`).
+      Verificado en vivo 2026-08-20 con el diagrama "CI/CD Pipeline": los 10 nodos originales
+      sobrevivieron, solo cambió el label pedido, `supersedes` correcto. Necesitó #7, #8 y #9
+      arreglados primero — cada retest anterior de esto fue justo lo que reveló el siguiente bug.
+- [x] #2 — auto-layout de diagramas (nodos ya no se apilan en `(0,0)`). Verificado en vivo, 3
+      diagramas distintos, todos con posiciones separadas y edges visibles.
+- [~] #5 — referencias de edge rotas se rechazan al guardar (manual y vía tool). **No reverificado
+      en vivo hoy** (nos desviamos hacia #7-#9) — sí tiene cobertura de test automatizado en verde
+      en ambos write paths (`TestCanvasManualEditRejectsDanglingDiagramEdge`,
+      `TestCanvasEditObjectRejectsDanglingDiagramEdge`), pero eso no reemplaza un click-through
+      real. Pendiente.
+- [~] #6 — placeholder de canvas vacío se oculta correctamente. **No reverificado formalmente** —
+      sí se observó funcionando de pasada varias veces hoy (desaparece cada vez que se materializa
+      algo), pero el caso límite del checklist (desactivar el único objeto activo, ¿reaparece el
+      placeholder?) nunca se probó. Pendiente.
+- [x] #7 — el anclaje nunca se activó, para ningún objeto (Task 9). Verificado en vivo: activar un
+      diagrama y pedir una edición sí lo mantiene presente — pero reveló #8 (abajo) al hacerlo con
+      dos objetos activos a la vez.
+- [x] #8 — con más de un objeto activo simultáneamente, el mini-chat editó el objeto equivocado y
+      creó un objeto duplicado por confusión. Causa raíz: el scoping del mini-chat era solo un
+      prefijo de texto advisory, nunca forzado. Arreglado en Task 10, verificado en vivo — el
+      segundo intento sí apuntó al `object_id` correcto.
+- [ ] #9 — **nuevo, encontrado verificando #8**: con el `object_id` correcto ya targeteado,
+      `canvas_edit_object` reemplazó el diagrama por uno **completamente inventado** (IDs de nodo
+      `"1"`, flujo distinto de pies a cabeza) en vez de editar el real. Causa raíz real, no era el
+      scoping: el objeto nunca había sido editado antes (cero átomos), y `dynamicCentro` solo
+      anclaba el átomo actual — si no existía ninguno, se saltaba el objeto en silencio aunque
+      estuviera activo. La primera edición de cualquier objeto siempre era ciega. Arreglado en
+      Task 11 (arriba) — pendiente de verificación en vivo: editar un objeto recién materializado
+      (sin ediciones previas) y confirmar que preserva su contenido real, no lo inventa.
 
 ## Explícitamente fuera de alcance (diferido a propósito, no olvidado)
 

@@ -197,6 +197,9 @@ func (t canvasCreateDraftTool) Execute(_ context.Context, rawInput string) (stri
 	if t.cell.projectID == "" {
 		return "no project is open — the canvas only works while the user has a project selected", true
 	}
+	if err := t.cell.checkScope(""); err != nil {
+		return err.Error(), true
+	}
 
 	var created canvasstore.CanvasObject
 	_, err := t.saveWithRetry(func(pc *canvasstore.ProjectCanvas) error {
@@ -252,6 +255,9 @@ func (t canvasMaterializeDraftTool) Execute(_ context.Context, rawInput string) 
 	}
 	if t.cell.projectID == "" {
 		return "no project is open — the canvas only works while the user has a project selected", true
+	}
+	if err := t.cell.checkScope(""); err != nil {
+		return err.Error(), true
 	}
 
 	var materialized canvasstore.CanvasObject
@@ -344,6 +350,9 @@ func (t canvasEditObjectTool) Execute(_ context.Context, rawInput string) (strin
 	if t.cell.projectID == "" {
 		return "no project is open — the canvas only works while the user has a project selected", true
 	}
+	if err := t.cell.checkScope(objectID); err != nil {
+		return err.Error(), true
+	}
 
 	var edited canvasstore.CanvasObject
 	_, err := t.saveWithRetry(func(pc *canvasstore.ProjectCanvas) error {
@@ -369,6 +378,141 @@ func (t canvasEditObjectTool) Execute(_ context.Context, rawInput string) (strin
 		return err.Error(), true
 	}
 	return fmt.Sprintf("edited %q — new version saved", edited.Name), false
+}
+
+// --- canvas_activate_object / canvas_deactivate_object ---
+//
+// The one missing trigger for the anchoring mechanism Round 2/4 already
+// designed: dynamicCentro (canvas_centro.go) already injects every active
+// object's current atom into the system prompt every turn, and
+// canvasstore.SetActivation already validates and maintains ActiveObjectIDs
+// — but nothing ever called it, so ActiveObjectIDs stayed empty forever
+// (see canvas_activation_gap_findings.md). These two tools are the only
+// piece that was missing, reusing SetActivation exactly as-is.
+//
+// Deliberately two narrow tools, not one with a boolean flag: a misfire on
+// a wrong tool name is auditable, a misfire on a flipped flag isn't — same
+// reasoning already applied to planning_open vs. the create-tools.
+//
+// Activation is a deliberate, explicit action — by the human directly (the
+// floating panel's toggle) or by the agent acting on an explicit human
+// instruction ("ancla esto", "ya no lo necesito presente"). Never an
+// inference from context, never a side effect of another tool — that
+// discipline is why canvas_materialize_draft does not auto-activate.
+
+type canvasActivateObjectTool struct{ canvasToolBase }
+
+func (t canvasActivateObjectTool) Definition() api.ToolDef {
+	return api.ToolDef{
+		Name: "canvas_activate_object",
+		Description: "Anchor a materialized Canvas object: its current content is injected into " +
+			"your system prompt every turn from now on, for every conversation in this project, until " +
+			"deactivated. Only call this when the human explicitly asks you to anchor/keep-present an " +
+			"object (e.g. \"ancla esto\", \"ten presente este diagrama\") — never as a helpful inference " +
+			"from context, since active objects are the most expensive thing in the whole design (full " +
+			"body injected unconditionally every turn). Only works on an object whose phase is already " +
+			"\"materialized\".",
+		InputSchema: map[string]any{
+			"object_id": map[string]any{
+				"type":        "string",
+				"description": "The exact object_id of the materialized object to activate.",
+			},
+		},
+		Required: []string{"object_id"},
+	}
+}
+
+func (t canvasActivateObjectTool) Execute(_ context.Context, rawInput string) (string, bool) {
+	objectID, errMsg, ok := parseObjectIDInput(rawInput)
+	if !ok {
+		return errMsg, true
+	}
+	if t.store == nil {
+		return "canvas is not configured", true
+	}
+	if t.cell.projectID == "" {
+		return "no project is open — the canvas only works while the user has a project selected", true
+	}
+	if err := t.cell.checkScope(objectID); err != nil {
+		return err.Error(), true
+	}
+
+	var activated canvasstore.CanvasObject
+	_, err := t.saveWithRetry(func(pc *canvasstore.ProjectCanvas) error {
+		if err := pc.SetActivation(objectID, canvasstore.ActivationActive); err != nil {
+			return err
+		}
+		activated = *findObjectByID(*pc, objectID)
+		return nil
+	})
+	if err != nil {
+		return err.Error(), true
+	}
+	return fmt.Sprintf("%q is now active — I'll keep it in mind this session", activated.Name), false
+}
+
+type canvasDeactivateObjectTool struct{ canvasToolBase }
+
+func (t canvasDeactivateObjectTool) Definition() api.ToolDef {
+	return api.ToolDef{
+		Name: "canvas_deactivate_object",
+		Description: "Un-anchor a materialized Canvas object: it stops being injected into your " +
+			"system prompt. Only call this when the human explicitly asks you to stop keeping an object " +
+			"present (e.g. \"ya no lo necesito anclado\", \"olvídate de ese diagrama por ahora\") — never " +
+			"as a helpful inference from context.",
+		InputSchema: map[string]any{
+			"object_id": map[string]any{
+				"type":        "string",
+				"description": "The exact object_id of the object to deactivate.",
+			},
+		},
+		Required: []string{"object_id"},
+	}
+}
+
+func (t canvasDeactivateObjectTool) Execute(_ context.Context, rawInput string) (string, bool) {
+	objectID, errMsg, ok := parseObjectIDInput(rawInput)
+	if !ok {
+		return errMsg, true
+	}
+	if t.store == nil {
+		return "canvas is not configured", true
+	}
+	if t.cell.projectID == "" {
+		return "no project is open — the canvas only works while the user has a project selected", true
+	}
+	if err := t.cell.checkScope(objectID); err != nil {
+		return err.Error(), true
+	}
+
+	var deactivated canvasstore.CanvasObject
+	_, err := t.saveWithRetry(func(pc *canvasstore.ProjectCanvas) error {
+		if err := pc.SetActivation(objectID, canvasstore.ActivationInactive); err != nil {
+			return err
+		}
+		deactivated = *findObjectByID(*pc, objectID)
+		return nil
+	})
+	if err != nil {
+		return err.Error(), true
+	}
+	return fmt.Sprintf("%q is no longer anchored", deactivated.Name), false
+}
+
+// parseObjectIDInput does the common {"object_id": "..."} decode+trim+
+// required-check shared by canvas_activate_object/canvas_deactivate_object.
+func parseObjectIDInput(rawInput string) (objectID, errMsg string, ok bool) {
+	var in struct {
+		ObjectID string `json:"object_id"`
+	}
+	if err := json.Unmarshal([]byte(rawInput), &in); err != nil {
+		return "", fmt.Sprintf("invalid tool input: %v", err), false
+	}
+	objectID = strings.TrimSpace(in.ObjectID)
+	if objectID == "" {
+		return "", "\"object_id\" is required", false
+	}
+	return objectID, "", true
 }
 
 // diagramNodeShape/diagramEdgeShape/diagramPayloadShape are the minimal

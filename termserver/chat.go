@@ -43,7 +43,18 @@ import (
 // reply signals as well-defined enough to materialize — see
 // CanvasSuggestion's doc comment. Like NavigateAction, it must be checked
 // and delivered regardless of whether err is also non-nil.
-type AgentRunner func(ctx context.Context, input string, history []api.Message, projectPath string, planningID string, boardID string) ([]api.Message, *NavigateAction, *CanvasSuggestion, error)
+//
+// canvasObjectID is "" for an ordinary main-composer turn, or a specific
+// object_id when this turn came from the floating panel's mini-chat for
+// that object (handleChat reads it from the request body's
+// canvas_object_id, sent only by the mini-chat — see app.js). The runner is
+// expected to thread it into Host.BeginTurn so canvas_edit_object/
+// canvas_activate_object/canvas_deactivate_object/canvas_create_draft/
+// canvas_materialize_draft refuse to act on any other object for the
+// duration of this turn — see agenthost's canvasCell.checkScope for why:
+// with more than one Canvas object anchored at once, the model can't
+// otherwise be trusted to infer which one a mini-chat message is about.
+type AgentRunner func(ctx context.Context, input string, history []api.Message, projectPath string, planningID string, boardID string, canvasObjectID string) ([]api.Message, *NavigateAction, *CanvasSuggestion, error)
 
 // CanvasSuggestion is the contextual "materialize this?" signal — the
 // button affordance from the Canvas build spec is never the only way to
@@ -392,6 +403,10 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		// empty (an empty client_id just never matches a real tab's own).
 		ClientID string `json:"client_id,omitempty"`
 		TurnID   string `json:"turn_id,omitempty"`
+		// CanvasObjectID scopes this turn to a single Canvas object — sent
+		// only by the floating panel's mini-chat (app.js), never by the main
+		// composer. See AgentRunner's doc comment.
+		CanvasObjectID string `json:"canvas_object_id,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Message == "" {
 		http.Error(w, "missing message", http.StatusBadRequest)
@@ -470,7 +485,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.chatBroadcaster.ClearReplay()
-	go func(message string, sess chatstore.ChatSession, planningID, boardID, clientID, turnID string) {
+	go func(message string, sess chatstore.ChatSession, planningID, boardID, clientID, turnID, canvasObjectID string) {
 		defer func() {
 			s.agentMu.Unlock()
 			s.chatBroadcaster.NotifyDone()
@@ -481,7 +496,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		// constructs one) for a value that only the yeyo gate's telemetry
 		// (agenthost/gate_telemetry.go, EXO_YEYO_GATE) currently reads.
 		runCtx := agenthost.ContextWithSessionID(context.Background(), sess.ID)
-		updated, navAction, canvasSuggestion, err := s.runner(runCtx, message, sess.Messages, sess.ProjectPath, planningID, boardID)
+		updated, navAction, canvasSuggestion, err := s.runner(runCtx, message, sess.Messages, sess.ProjectPath, planningID, boardID, canvasObjectID)
 		if err != nil {
 			_, _ = io.WriteString(s.chatBroadcaster, "error: "+err.Error()+"\n")
 		}
@@ -519,7 +534,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 				fmt.Printf("termserver: failed to save chat session %q: %v\n", sess.ID, saveErr)
 			}
 		}
-	}(body.Message, session, planningID, boardID, body.ClientID, body.TurnID)
+	}(body.Message, session, planningID, boardID, body.ClientID, body.TurnID, body.CanvasObjectID)
 
 	s.recordActivity()
 	resp := map[string]string{"status": "accepted"}

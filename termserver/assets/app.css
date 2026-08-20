@@ -1098,6 +1098,24 @@ button:disabled {
   border-color: rgba(134, 239, 172, 0.3);
 }
 
+/* #canvas-object-activation-toggle reuses the badge's read-only look but
+   is an actual button (the floating panel's real activate/deactivate
+   control — see app.js) so it needs pointer affordance and a hover state,
+   unlike the read-only card badge above. */
+#canvas-object-activation-toggle {
+  cursor: pointer;
+  background: transparent;
+}
+
+#canvas-object-activation-toggle:hover {
+  border-color: var(--muted);
+}
+
+#canvas-object-activation-toggle:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
 /* Diagram render surface: nodes/edges are absolutely positioned within a
    fixed-size stage per the payload's layout.width/height (§6 of the build
    plan); an SVG overlay in the same stage draws edges as lines between

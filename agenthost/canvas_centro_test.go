@@ -90,3 +90,52 @@ func TestDynamicCentroInjectsOnlyActiveMaterializedObjects(t *testing.T) {
 		t.Fatalf("dynamicCentro injected a superseded atom body: %q", block)
 	}
 }
+
+// TestDynamicCentroFallsBackToPayloadWhenNoAtomExists confirms the fix for
+// the live-testing finding: an object that's materialized and active but
+// has never been edited (canvas_edit_object was never called on it, so it
+// has zero atoms) must still be anchored, using its Payload from
+// materialization — not silently skipped. Before this fix, the model's
+// first-ever edit to any object had nothing real in its context and
+// fabricated a diagram from scratch instead of editing the actual one.
+func TestDynamicCentroFallsBackToPayloadWhenNoAtomExists(t *testing.T) {
+	store, err := canvasstore.New(t.TempDir())
+	if err != nil {
+		t.Fatalf("canvasstore.New: %v", err)
+	}
+	pc, err := store.Load("/proj")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	obj, err := pc.AddDraft("diagram", "Never Edited", json.RawMessage(`{"nodes":["original materialize-time payload"]}`))
+	if err != nil {
+		t.Fatalf("AddDraft: %v", err)
+	}
+	if err := pc.Materialize(obj.ObjectID); err != nil {
+		t.Fatalf("Materialize: %v", err)
+	}
+	if err := pc.SetActivation(obj.ObjectID, canvasstore.ActivationActive); err != nil {
+		t.Fatalf("SetActivation: %v", err)
+	}
+	if _, err := store.Save(pc); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	// Sanity check the premise: this object really has no atoms.
+	reloaded, err := store.Load("/proj")
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if _, ok := reloaded.CurrentAtom(obj.ObjectID); ok {
+		t.Fatalf("test setup invalid: object unexpectedly has an atom")
+	}
+
+	block := dynamicCentro(store, "/proj")
+	if !strings.Contains(block, obj.Name) {
+		t.Fatalf("dynamicCentro did not inject the never-edited active object: %q", block)
+	}
+	if !strings.Contains(block, "original materialize-time payload") {
+		t.Fatalf("dynamicCentro did not fall back to Payload: %q", block)
+	}
+}

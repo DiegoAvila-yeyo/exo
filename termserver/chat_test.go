@@ -21,7 +21,7 @@ func TestChatPostReturns409WhenTurnBusy(t *testing.T) {
 	blocked := make(chan struct{})
 	release := make(chan struct{})
 
-	_, server, httpServer := newTestServer(t, store, WithAgentRunner(func(_ context.Context, _ string, _ []api.Message, _ string, _ string, _ string) ([]api.Message, *NavigateAction, *CanvasSuggestion, error) {
+	_, server, httpServer := newTestServer(t, store, WithAgentRunner(func(_ context.Context, _ string, _ []api.Message, _ string, _ string, _ string, _ string) ([]api.Message, *NavigateAction, *CanvasSuggestion, error) {
 		close(blocked)
 		<-release
 		return nil, nil, nil, nil
@@ -66,7 +66,7 @@ func TestChatStreamEmitsIdleBusyOutputApprovalDoneWithExactSchema(t *testing.T) 
 	var serverRef *Server
 	approvalRequested := make(chan struct{})
 
-	runner := func(_ context.Context, _ string, _ []api.Message, _ string, _ string, _ string) ([]api.Message, *NavigateAction, *CanvasSuggestion, error) {
+	runner := func(_ context.Context, _ string, _ []api.Message, _ string, _ string, _ string, _ string) ([]api.Message, *NavigateAction, *CanvasSuggestion, error) {
 		_, _ = io.WriteString(serverRef.ChatOutputWriter(), "hello from runner\n")
 		close(approvalRequested)
 		if !serverRef.RequestApproval("Approve shell write?", "detail text", map[string]string{
@@ -140,7 +140,7 @@ func TestChatStreamStripsANSIFromOutputEvents(t *testing.T) {
 	blocked := make(chan struct{})
 	release := make(chan struct{})
 
-	runner := func(_ context.Context, _ string, _ []api.Message, _ string, _ string, _ string) ([]api.Message, *NavigateAction, *CanvasSuggestion, error) {
+	runner := func(_ context.Context, _ string, _ []api.Message, _ string, _ string, _ string, _ string) ([]api.Message, *NavigateAction, *CanvasSuggestion, error) {
 		_, _ = io.WriteString(serverRef.ChatOutputWriter(), "\x1b[36mhello\x1b[0m world\n")
 		close(blocked)
 		<-release
@@ -224,7 +224,7 @@ func TestApprovalRoutesResolvePendingApproval(t *testing.T) {
 
 func TestChatRoutesEnforceOriginAndCSRF(t *testing.T) {
 	store := newFakeStore()
-	_, server, httpServer := newTestServer(t, store, WithAgentRunner(func(_ context.Context, _ string, _ []api.Message, _ string, _ string, _ string) ([]api.Message, *NavigateAction, *CanvasSuggestion, error) {
+	_, server, httpServer := newTestServer(t, store, WithAgentRunner(func(_ context.Context, _ string, _ []api.Message, _ string, _ string, _ string, _ string) ([]api.Message, *NavigateAction, *CanvasSuggestion, error) {
 		return nil, nil, nil, nil
 	}))
 	client, csrf := bootstrapClient(t, httpServer, server)

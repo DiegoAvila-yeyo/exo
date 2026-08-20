@@ -304,7 +304,7 @@ func TestHostBeginTurnResetsNavigateSlot(t *testing.T) {
 	cell.current.action = &NavigateAction{PlanningID: "stale"}
 	h := &Host{navigateCell: cell}
 
-	h.BeginTurn("next turn's message")
+	h.BeginTurn("next turn's message", "")
 	if h.TakeNavigateAction() != nil {
 		t.Fatalf("TakeNavigateAction = %+v after BeginTurn, want nil (reset)", h.TakeNavigateAction())
 	}

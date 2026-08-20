@@ -38,11 +38,28 @@ func dynamicCentro(store *canvasstore.Store, projectID string) string {
 			// also clean up the list — skip rather than error.
 			continue
 		}
-		atom, ok := pc.CurrentAtom(id)
-		if !ok {
+		// Fall back to the object's own Payload (set at materialization,
+		// never touched by AppendAtom — see canvasstore.Materialize's doc
+		// comment) when no atom exists yet. Before this fix, an object that
+		// was materialized but never edited had *zero* anchored content
+		// despite being Active: CurrentAtom reports ok=false with no atoms,
+		// and the object was silently skipped — the model's very first edit
+		// to any object was always "blind," with nothing of the real
+		// content in its context, which is what actually produced the
+		// fabricated 10-node diagram found in live testing (not a scoping
+		// bug — canvas_edit_object had the right object_id that time, it
+		// just had never seen what was actually in it). Mirrors app.js's
+		// own `currentAtomBody(objectId) || obj.payload` fallback — the
+		// server-side anchor and the client-side render should agree on
+		// what "the object's current content" means.
+		body := obj.Payload
+		if atom, ok := pc.CurrentAtom(id); ok {
+			body = atom.Body
+		}
+		if len(body) == 0 {
 			continue
 		}
-		fmt.Fprintf(&b, "\n\n--- Canvas object %q (%s) ---\n%s", obj.Name, obj.Type, atom.Body)
+		fmt.Fprintf(&b, "\n\n--- Canvas object %q (%s) ---\n%s", obj.Name, obj.Type, body)
 	}
 	return b.String()
 }

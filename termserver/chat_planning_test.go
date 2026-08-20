@@ -171,7 +171,7 @@ func TestChatPlanningContextSetsAndClearsExplicitly(t *testing.T) {
 	}
 
 	var receivedPlanningIDs, receivedBoardIDs []string
-	runner := func(_ context.Context, _ string, _ []api.Message, _ string, planningID string, boardID string) ([]api.Message, *NavigateAction, *CanvasSuggestion, error) {
+	runner := func(_ context.Context, _ string, _ []api.Message, _ string, planningID string, boardID string, _ string) ([]api.Message, *NavigateAction, *CanvasSuggestion, error) {
 		receivedPlanningIDs = append(receivedPlanningIDs, planningID)
 		receivedBoardIDs = append(receivedBoardIDs, boardID)
 		return nil, nil, nil, nil
@@ -243,7 +243,7 @@ func TestChatPlanningContextAllowsPlanningOnly(t *testing.T) {
 	}
 
 	var receivedPlanningIDs, receivedBoardIDs []string
-	runner := func(_ context.Context, _ string, _ []api.Message, _ string, planningID string, boardID string) ([]api.Message, *NavigateAction, *CanvasSuggestion, error) {
+	runner := func(_ context.Context, _ string, _ []api.Message, _ string, planningID string, boardID string, _ string) ([]api.Message, *NavigateAction, *CanvasSuggestion, error) {
 		receivedPlanningIDs = append(receivedPlanningIDs, planningID)
 		receivedBoardIDs = append(receivedBoardIDs, boardID)
 		return nil, nil, nil, nil
@@ -290,7 +290,7 @@ func TestChatPlanningContextRejectsPartialPairAndLeavesContextUnchanged(t *testi
 		t.Fatalf("Save: %v", err)
 	}
 
-	runner := func(_ context.Context, _ string, _ []api.Message, _ string, _ string, _ string) ([]api.Message, *NavigateAction, *CanvasSuggestion, error) {
+	runner := func(_ context.Context, _ string, _ []api.Message, _ string, _ string, _ string, _ string) ([]api.Message, *NavigateAction, *CanvasSuggestion, error) {
 		return nil, nil, nil, nil
 	}
 	_, server, httpServer := newTestServer(t, store, WithAgentRunner(runner), WithChatStore(chats), WithPlanningStore(ps))
@@ -353,7 +353,7 @@ func TestChatPlanningContextRejectsBoardFromAnotherPlanning(t *testing.T) {
 	}
 	_ = boardA
 
-	runner := func(_ context.Context, _ string, _ []api.Message, _ string, _ string, _ string) ([]api.Message, *NavigateAction, *CanvasSuggestion, error) {
+	runner := func(_ context.Context, _ string, _ []api.Message, _ string, _ string, _ string, _ string) ([]api.Message, *NavigateAction, *CanvasSuggestion, error) {
 		return nil, nil, nil, nil
 	}
 	_, server, httpServer := newTestServer(t, store, WithAgentRunner(runner), WithChatStore(chats), WithPlanningStore(ps))
@@ -415,7 +415,7 @@ func decodeErrorBody(resp *http.Response) (string, error) {
 func TestChatStreamDeliversNavigateEventOnErrorToo(t *testing.T) {
 	store := newFakeStore()
 	chats := newTestChatStore(t)
-	runner := func(_ context.Context, _ string, _ []api.Message, _ string, _ string, _ string) ([]api.Message, *NavigateAction, *CanvasSuggestion, error) {
+	runner := func(_ context.Context, _ string, _ []api.Message, _ string, _ string, _ string, _ string) ([]api.Message, *NavigateAction, *CanvasSuggestion, error) {
 		return nil, &NavigateAction{PlanningID: "planning-x", PlanningName: "Exo", BoardID: "board-y", BoardName: "Auth"}, nil, errFakeTurnFailure
 	}
 	_, server, httpServer := newTestServer(t, store, WithAgentRunner(runner), WithChatStore(chats))
@@ -461,7 +461,7 @@ var errFakeTurnFailure = errors.New("simulated LLM failure after tool committed"
 func TestChatNavigateDoesNotMutateSessionPlanningContext(t *testing.T) {
 	store := newFakeStore()
 	chats := newTestChatStore(t)
-	runner := func(_ context.Context, _ string, _ []api.Message, _ string, _ string, _ string) ([]api.Message, *NavigateAction, *CanvasSuggestion, error) {
+	runner := func(_ context.Context, _ string, _ []api.Message, _ string, _ string, _ string, _ string) ([]api.Message, *NavigateAction, *CanvasSuggestion, error) {
 		// Navigates somewhere else entirely — must not leak into session context.
 		return nil, &NavigateAction{PlanningID: "elsewhere", PlanningName: "Elsewhere"}, nil, nil
 	}

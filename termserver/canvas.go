@@ -256,9 +256,12 @@ func (s *Server) handleCanvasObjectPatch(w http.ResponseWriter, r *http.Request,
 }
 
 // handleCanvasObjectActivation is the human-curated activate/deactivate
-// action — deliberately HTTP-only, not an agent tool, per the Canvas build
-// spec's "keep the active set small and human-curated by design — no
-// automatic accumulation."
+// action, reached from the floating panel's toggle (and, via
+// agenthost.canvasActivateObjectTool/canvasDeactivateObjectTool, by the
+// agent acting on an explicit human instruction). Activation stays
+// deliberate either way — never automatic, never a side effect of another
+// tool — per the Canvas build spec's "keep the active set small and
+// human-curated by design — no automatic accumulation."
 func (s *Server) handleCanvasObjectActivation(w http.ResponseWriter, r *http.Request, objectID string, activation canvasstore.Activation) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

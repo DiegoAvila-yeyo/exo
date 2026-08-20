@@ -508,6 +508,8 @@ func buildToolRegistry(adapter *m8adapter.Adapter, planningStore *planningstore.
 	registry.Register(canvasCreateDraftTool{canvasBase})
 	registry.Register(canvasMaterializeDraftTool{canvasBase})
 	registry.Register(canvasEditObjectTool{canvasBase})
+	registry.Register(canvasActivateObjectTool{canvasBase})
+	registry.Register(canvasDeactivateObjectTool{canvasBase})
 	return registry
 }
 

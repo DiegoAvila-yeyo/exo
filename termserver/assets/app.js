@@ -63,6 +63,7 @@
     canvasObjectPanel: document.getElementById("canvas-object-panel"),
     canvasObjectPanelBackdrop: document.getElementById("canvas-object-panel-backdrop"),
     canvasObjectPanelTitle: document.getElementById("canvas-object-panel-title"),
+    canvasObjectActivationToggle: document.getElementById("canvas-object-activation-toggle"),
     canvasObjectPanelClose: document.getElementById("canvas-object-panel-close"),
     canvasObjectPayloadInput: document.getElementById("canvas-object-payload-input"),
     canvasObjectSaveButton: document.getElementById("canvas-object-save-button"),
@@ -1802,9 +1803,74 @@
     refs.canvasObjectPayloadInput.value = JSON.stringify(body, null, 2);
     refs.canvasObjectSaveFeedback.textContent = "";
     refs.canvasMinichatLog.innerHTML = "";
+    renderCanvasObjectActivationToggle();
     refs.canvasObjectPanel.hidden = false;
     refs.canvasObjectPayloadInput.focus();
   }
+
+  // Mirrors the card badge's active/inactive look (canvas-object-card__badge
+  // in renderCanvasView), but this one is the real control — see the click
+  // handler below.
+  function renderCanvasObjectActivationToggle() {
+    if (!state.canvas || !state.activeCanvasObjectId) {
+      return;
+    }
+    const obj = (state.canvas.objects || []).find(function (o) { return o.object_id === state.activeCanvasObjectId; });
+    if (!obj) {
+      return;
+    }
+    const active = obj.activation === "active";
+    refs.canvasObjectActivationToggle.dataset.active = active ? "true" : "false";
+    refs.canvasObjectActivationToggle.textContent = active ? "Active — click to un-anchor" : "Anchor to chat";
+  }
+
+  // setCanvasObjectActivation calls the same POST /activate|/deactivate
+  // endpoint the QA findings doc identified as already built but never
+  // wired up (termserver/canvas.go's handleCanvasObjectActivation, backed
+  // by canvasstore.SetActivation) — no new request helper, reuses postJSON.
+  function setCanvasObjectActivation(objectId, action) {
+    const url = "/api/canvases/objects/" + encodeURIComponent(objectId) + "/" + action +
+      "?project_path=" + encodeURIComponent(state.activeProjectPath) +
+      "&csrf_token=" + encodeURIComponent(csrf);
+    return postJSON(url, {});
+  }
+
+  // Activation toggle: same 409/stale_version convention as the manual-edit
+  // PATCH above, except here the retry is automatic and single-shot rather
+  // than asking the human to click Save again — a toggle click carries a
+  // fixed, unambiguous intent (flip to the opposite of what was last
+  // known), so replaying that same action once against a freshly-reloaded
+  // canvas is safe where blindly replaying an arbitrary payload edit would
+  // not be.
+  refs.canvasObjectActivationToggle.addEventListener("click", async function () {
+    if (!state.activeCanvasObjectId || !state.activeProjectPath || !state.canvas) {
+      return;
+    }
+    const obj = (state.canvas.objects || []).find(function (o) { return o.object_id === state.activeCanvasObjectId; });
+    if (!obj) {
+      return;
+    }
+    const action = obj.activation === "active" ? "deactivate" : "activate";
+    refs.canvasObjectActivationToggle.disabled = true;
+    try {
+      state.canvas = await setCanvasObjectActivation(state.activeCanvasObjectId, action);
+    } catch (error) {
+      if (error && error.message === "stale_version") {
+        await refreshCanvasView();
+        try {
+          state.canvas = await setCanvasObjectActivation(state.activeCanvasObjectId, action);
+        } catch (retryError) {
+          refs.canvasObjectSaveFeedback.textContent = retryError.message || "Could not update activation.";
+        }
+      } else {
+        refs.canvasObjectSaveFeedback.textContent = error.message || "Could not update activation.";
+      }
+    } finally {
+      refs.canvasObjectActivationToggle.disabled = false;
+      renderCanvasObjectActivationToggle();
+      renderCanvasView();
+    }
+  });
 
   function closeCanvasObjectPanel() {
     refs.canvasObjectPanel.hidden = true;
@@ -1854,21 +1920,30 @@
     }
   });
 
-  // The mini-chat is scoped by reference, not by a separate session/
-  // protocol: it sends an ordinary chat message prefixed with which Canvas
+  // The mini-chat sends an ordinary chat message prefixed with which Canvas
   // object it's about, through the same /api/chat path as the main
   // composer, so the agent's normal edit/read tools (and the dynamicCentro
   // anchor, if this object happens to be active) apply exactly as they
-  // would from the main chat.
+  // would from the main chat. The text prefix alone used to be the *only*
+  // scoping — advisory, not enforced — which let the model act on a
+  // different Canvas object than the one this panel is for whenever more
+  // than one object was anchored at once (confirmed in live testing: an
+  // edit meant for one diagram landed on another, and a duplicate object
+  // got created). canvas_object_id below is the real, enforced scope: the
+  // server rejects any canvas_edit_object/activate/deactivate/create_draft/
+  // materialize_draft call this turn that doesn't target this exact object
+  // (agenthost's canvasCell.checkScope) — the browser states which object's
+  // panel is open, the model never gets to guess.
   refs.canvasMinichatForm.addEventListener("submit", async function (event) {
     event.preventDefault();
     const message = refs.canvasMinichatInput.value.trim();
     if (!message || !state.activeCanvasObjectId || !state.canvas) {
       return;
     }
-    const obj = (state.canvas.objects || []).find(function (o) { return o.object_id === state.activeCanvasObjectId; });
+    const scopedObjectId = state.activeCanvasObjectId;
+    const obj = (state.canvas.objects || []).find(function (o) { return o.object_id === scopedObjectId; });
     const scoped = "Regarding Canvas object \"" + (obj ? obj.name : "") + "\" (object_id " +
-      state.activeCanvasObjectId + "): " + message;
+      scopedObjectId + "): " + message;
     const entry = document.createElement("p");
     entry.textContent = "You: " + message;
     refs.canvasMinichatLog.appendChild(entry);
@@ -1885,6 +1960,7 @@
       body.board_id = "";
       body.client_id = clientId;
       body.turn_id = newTurnId();
+      body.canvas_object_id = scopedObjectId;
       await postJSON("/api/chat?csrf_token=" + encodeURIComponent(csrf), body);
     } catch (error) {
       const errEntry = document.createElement("p");

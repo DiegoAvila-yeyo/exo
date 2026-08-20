@@ -62,11 +62,18 @@ func newNavigateCell() *navigateCell {
 // per-turn entrypoint. canvasCell.projectID is read from currentRootPath,
 // which SetRootPath has already updated by the time callers reach
 // BeginTurn (see backend.go's runner closure: SetRootPath, then BeginTurn).
-func (h *Host) BeginTurn(humanMessage string) {
+//
+// canvasScopedObjectID is "" for an ordinary main-chat turn, or a specific
+// object_id when this turn came from the floating panel's mini-chat for
+// that object — set from the browser's own request, never inferred here or
+// by the model. See canvasCell.checkScope's doc comment for why this
+// exists.
+func (h *Host) BeginTurn(humanMessage string, canvasScopedObjectID string) {
 	h.navigateCell.current = &navigateSlot{humanMessage: humanMessage}
 	if h.canvasCell != nil {
 		h.canvasCell.humanMessage = humanMessage
 		h.canvasCell.projectID = h.currentRootPath
+		h.canvasCell.scopedObjectID = canvasScopedObjectID
 	}
 }
 

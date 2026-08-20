@@ -34,7 +34,7 @@ func TestChatSessionsCreateAppearsInList(t *testing.T) {
 func TestChatPostLazilyCreatesSessionAndDerivesTitleFromFirstMessage(t *testing.T) {
 	store := newFakeStore()
 	chats := newTestChatStore(t)
-	runner := func(_ context.Context, _ string, _ []api.Message, _ string, _ string, _ string) ([]api.Message, *NavigateAction, *CanvasSuggestion, error) {
+	runner := func(_ context.Context, _ string, _ []api.Message, _ string, _ string, _ string, _ string) ([]api.Message, *NavigateAction, *CanvasSuggestion, error) {
 		return []api.Message{{Role: api.RoleUser, Content: []api.Block{{Type: api.BlockText, Text: "hi"}}}}, nil, nil, nil
 	}
 	_, server, httpServer := newTestServer(t, store, WithAgentRunner(runner), WithChatStore(chats))
@@ -58,7 +58,7 @@ func TestChatSessionsIsolateHistoryBetweenSessions(t *testing.T) {
 	chats := newTestChatStore(t)
 
 	var receivedHistories [][]api.Message
-	runner := func(_ context.Context, _ string, history []api.Message, _ string, _ string, _ string) ([]api.Message, *NavigateAction, *CanvasSuggestion, error) {
+	runner := func(_ context.Context, _ string, history []api.Message, _ string, _ string, _ string, _ string) ([]api.Message, *NavigateAction, *CanvasSuggestion, error) {
 		receivedHistories = append(receivedHistories, history)
 		return append(append([]api.Message{}, history...), api.Message{
 			Role: api.RoleAssistant, Content: []api.Block{{Type: api.BlockText, Text: "ack"}},
@@ -105,7 +105,7 @@ func TestChatPostThreadsProjectPathToRunnerAndPersistsIt(t *testing.T) {
 	chats := newTestChatStore(t)
 
 	var receivedPaths []string
-	runner := func(_ context.Context, _ string, _ []api.Message, projectPath string, _ string, _ string) ([]api.Message, *NavigateAction, *CanvasSuggestion, error) {
+	runner := func(_ context.Context, _ string, _ []api.Message, projectPath string, _ string, _ string, _ string) ([]api.Message, *NavigateAction, *CanvasSuggestion, error) {
 		receivedPaths = append(receivedPaths, projectPath)
 		return nil, nil, nil, nil
 	}

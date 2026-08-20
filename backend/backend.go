@@ -199,7 +199,7 @@ func Run(ctx context.Context, config Config) error {
 	})
 
 	var server *termserver.Server
-	runner := func(ctx context.Context, input string, history []api.Message, projectPath string, planningID string, boardID string) ([]api.Message, *termserver.NavigateAction, *termserver.CanvasSuggestion, error) {
+	runner := func(ctx context.Context, input string, history []api.Message, projectPath string, planningID string, boardID string, canvasObjectID string) ([]api.Message, *termserver.NavigateAction, *termserver.CanvasSuggestion, error) {
 		if server == nil {
 			return nil, nil, nil, fmt.Errorf("termserver agent runner invoked before server initialization")
 		}
@@ -220,7 +220,7 @@ func Run(ctx context.Context, config Config) error {
 		}
 		host.SetMessages(history)
 		host.SetPlanningContext(planningID, boardID)
-		host.BeginTurn(input)
+		host.BeginTurn(input, canvasObjectID)
 		// Must run after BeginTurn (canvasCell.projectID is only current once
 		// BeginTurn has read it off currentRootPath) and every turn,
 		// unconditionally — see Host.RefreshCanvasCentro's doc comment for
