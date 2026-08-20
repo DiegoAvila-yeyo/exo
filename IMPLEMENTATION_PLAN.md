@@ -134,7 +134,14 @@ base de terminal ya estable y segura.
       `CombinedOutput`). `backend.lock` de 0 bytes tras uninstall se deja como está a propósito
       (riesgo de carrera con un holder vivo, decisión documentada). Revisado, `go test -race
       -count=2` limpio.
-- [ ] M8 — Integración con el agente de `nucleo-base` (sin diseño detallado todavía)
+- [x] M8 — Integración con el agente de `nucleo-base`. Diseñado en 3 rondas de crítica Claude↔Codex
+      (`M8_design_round1-3_prompt.md`/`_response.md`, cerradas sin preguntas abiertas — ver
+      `M8_INTEGRATION_DESIGN.md`) y construido en 12 build prompts (`build_prompt_M8_1.md` a
+      `build_prompt_M8_12_chatgpt_layout.md`: integración base, memoria, rediseño de chat UI,
+      integración MCP, fixes de rootpath/launchd). Ya incluido en el primer commit de este repo
+      (`37d8579`, mensaje: "M8 nucleo-base integration"). Este checkbox estaba desactualizado —
+      corregido 2026-08-20 tras confirmarlo en vivo tanto en código como probando el chat real.
+      El feature Canvas (`CANVAS_STATUS.md`) se construyó después, sobre esta base.
 
 ## Criterio para hallazgos menores durante revisión
 
@@ -149,14 +156,20 @@ milestone donde se encontró.
 
 ### Lista de hardening pendiente (M7)
 
-- **M1** — `scrub()` es un stub de regex simple (`api[_-]?key|token|secret`), no la lógica real de
-  detección de secretos discutida en las rondas 2-3. Reemplazar antes de v1 real.
-- **M2** — `broadcastLease` hace `client.leaseUpdates <- ...` (envío potencialmente bloqueante)
-  mientras sostiene el mutex `clientsMu`, en vez de un non-blocking send con
-  desconexión del cliente lento. Bajo riesgo con un solo usuario y pocas conexiones, pero
-  inconsistente con el principio de "nunca bloquear por un consumidor lento" del resto del diseño.
-- **M4** — `exo install` imprime `Boot-out failed: 5: Input/output error` en una instalación
-  limpia (sin instancia previa cargada) — el error se ignora correctamente en el código, pero el
-  mensaje de `launchctl` se filtra a stderr y se ve como un fallo real cuando no lo es. Suprimir o
-  reemplazar por un mensaje más claro. También queda un `backend.lock` de 0 bytes tras
-  `uninstall` — artefacto normal de `flock`, sin impacto funcional, opcional limpiarlo.
+Corregido 2026-08-20: los 3 ítems de abajo quedaron **resueltos por M7 mismo** — la propia entrada
+`[x] M7` más arriba ya lo dice ("scrubber real con múltiples reglas", "`broadcastLease` no
+bloqueante", "`install`/`uninstall` ya no imprimen el mensaje alarmante"), pero esta lista nunca se
+limpió después de que M7 cerró. Se deja el texto original tachado como registro, no como pendiente
+real:
+
+- ~~**M1** — `scrub()` es un stub de regex simple (`api[_-]?key|token|secret`), no la lógica real
+  de detección de secretos discutida en las rondas 2-3.~~ Resuelto en M7: reglas reales (PEM keys,
+  Authorization Bearer, AWS access keys, JWTs, asignaciones env-var), con suite de tests tabla
+  incluyendo negativos.
+- ~~**M2** — `broadcastLease` hace `client.leaseUpdates <- ...` (envío potencialmente bloqueante)
+  mientras sostiene el mutex `clientsMu`.~~ Resuelto en M7: non-blocking send (`select`/`default`,
+  drop-on-full), mismo principio que el actor de M1.
+- ~~**M4** — `exo install` imprime `Boot-out failed: 5: Input/output error` en una instalación
+  limpia.~~ Resuelto en M7: `RunQuiet` con `CombinedOutput` suprime el mensaje engañoso. El
+  `backend.lock` de 0 bytes tras `uninstall` se deja **a propósito** (riesgo de carrera con un
+  holder vivo, decisión ya documentada en M7, no es un olvido).
