@@ -11,7 +11,7 @@
 // with the total kept at 50 throughout.
 package agenthost
 
-import "github.com/yeyoos/yeyo"
+import "github.com/yeyoos/yeyo/fixtures"
 
 // q3TargetName is Q3's target atom — different from Q1+Q2's
 // protocolo-hulk, but the same "pull the real atom, don't invent content"
@@ -21,11 +21,15 @@ const q3TargetName = "worktrees-not-code-dir"
 // q3N is the fixed catalog size for every Q3 condition.
 const q3N = 50
 
-// q3TargetAtom fetches the real worktrees-not-code-dir atom from yeyo.
+// q3TargetAtom fetches the real worktrees-not-code-dir atom from yeyo's
+// fixtures package. Moved there (from yeyo.Get) when the catálogo real
+// rollout took the 10 Exp1-Q6b synthetic atoms out of the production
+// loader — see docs/experiments-roadmap.md, Fase operacional punto 4, in
+// ~/yeyo.
 func q3TargetAtom() scaleAtom {
-	a, ok := yeyo.Get(q3TargetName)
+	a, ok := fixtures.GetYeyoAtom(q3TargetName)
 	if !ok {
-		panic("agenthost: yeyo atom \"worktrees-not-code-dir\" not found — is ~/yeyo/atoms/periferia intact?")
+		panic("agenthost: yeyo fixture \"worktrees-not-code-dir\" not found — is ~/yeyo/fixtures/experimental-atoms intact?")
 	}
 	return scaleAtom{Name: a.Name, Description: a.Description, Body: a.Body}
 }

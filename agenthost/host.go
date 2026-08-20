@@ -72,6 +72,16 @@ type Host struct {
 	telemetry *yeyotelemetry.Store
 	gateTurn  *gateTurnState
 
+	// gateLastInput and gateLastInputMu exist only when gateEnabled — see
+	// previousRawInputForSession/rememberRawInputForSession
+	// (gate_telemetry.go) for what they hold and why: the fix for the
+	// cross-turn context bug (build_prompt_YEYO_FIX_AMBOS.md, Bug 1), a
+	// bounded one-turn lookback of each session's raw input, folded into the
+	// next turn's prompt so a short follow-up ("la ruta es X") doesn't reach
+	// the gate stripped of what it's actually answering.
+	gateLastInputMu sync.Mutex
+	gateLastInput   map[string]string
+
 	stdoutMu sync.Mutex
 }
 
@@ -369,7 +379,25 @@ func (h *Host) Run(ctx context.Context, input string, output io.Writer) error {
 	if h.coordinator == nil {
 		return fmt.Errorf("agenthost: coordinator is not configured")
 	}
-	_, err = h.coordinator.Run(ctx, input)
+
+	// Bug 1 fix (build_prompt_YEYO_FIX_AMBOS.md): fold the previous turn's
+	// raw input into this turn's prompt, ahead of everything else the
+	// coordinator does with it, so a short follow-up that doesn't restate
+	// the original request ("la ruta es X") still reaches the gate's
+	// decision with what it's actually answering. Order matters — read
+	// before remember, or a turn would see itself as its own "previous
+	// message". See previousRawInputForSession's doc comment for why this,
+	// not task-ID tracking, is the fix, and gatePreviousMessageBlock's for
+	// the wire format.
+	coordinatorInput := input
+	if h.gateEnabled {
+		if block := gatePreviousMessageBlock(h.previousRawInputForSession(sessionID)); block != "" {
+			coordinatorInput = input + "\n\n" + block
+		}
+		h.rememberRawInputForSession(sessionID, input)
+	}
+
+	_, err = h.coordinator.Run(ctx, coordinatorInput)
 
 	// Technical outcome only — never a judgment about whether the gate's
 	// decision was right, see recordGateTurnResult's doc comment.

@@ -1,0 +1,10 @@
+{
+  "stack": "go",
+  "fingerprint": "13f1369da35dd93382702cb641393ca799d077faf6317f4abc431d2743c8525a",
+  "commands": [
+    "go build ./..."
+  ],
+  "summary": "- [ok] `go build ./...`",
+  "success": true,
+  "completed_at": "2026-08-19T10:14:08.605026-06:00"
+}

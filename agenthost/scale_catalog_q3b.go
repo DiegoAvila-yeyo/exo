@@ -16,7 +16,10 @@
 // measured (top-5-before-get + multi-get detection), not just this file.
 package agenthost
 
-import "github.com/yeyoos/yeyo"
+import (
+	"github.com/yeyoos/yeyo"
+	"github.com/yeyoos/yeyo/fixtures"
+)
 
 // q3bRedundantNames is the group this round measures internal ambiguity
 // over: the real target plus its 3 functionally-equivalent redundants.
@@ -93,5 +96,5 @@ func buildQ3BCatalog(seed int64) scaleCatalog {
 // confirm the target this round reuses is really the same real atom Q3
 // used — not a re-typed copy that could silently drift.
 func yeyoAtomsForQ3BSanityCheck() (yeyo.Atom, bool) {
-	return yeyo.Get(q3TargetName)
+	return fixtures.GetYeyoAtom(q3TargetName)
 }

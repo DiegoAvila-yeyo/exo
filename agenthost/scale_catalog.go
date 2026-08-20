@@ -5,19 +5,24 @@
 //
 // This is deliberately additive, not a modification of the validated K2
 // mechanism (atoms_decision_tool.go / atom_tool.go / checkpoint.go /
-// yeyo.RenderIndex / the real ~/yeyo/atoms/periferia files). Those stay
-// untouched — see checkpoint_scale.go for the parallel tool wiring that
-// reuses the same *shape* (gate → index-in-inspect-response → free get) over
-// a synthetic, size-parameterized catalog instead of the real one.
+// yeyo.RenderIndex). Those stay untouched — see checkpoint_scale.go for the
+// parallel tool wiring that reuses the same *shape* (gate →
+// index-in-inspect-response → free get) over a synthetic, size-parameterized
+// catalog instead of the real one.
 //
-// The target atom is always the real protocolo-hulk (pulled from the yeyo
-// package, real content, real name) — only the distractor pool around it is
-// synthetic. The baseline condition reuses the real periferia distractors
-// verbatim (10 atoms total today: target + 9 distractors — docs/vision.md
-// says "9 atoms" because that described the catalog before Exp1F added 3
-// "no-obvious" atoms; see build_prompt_YEYO_Q1Q2.md's note and the report's
-// "Nota metodológica"), so it's the exact same catalog Exp1K/1K2 already
-// validated, just one atom bigger; N=20/50/100/200 top that up with
+// The target atom is always the real protocolo-hulk (pulled from yeyo's
+// fixtures package, real content, real name) — only the distractor pool
+// around it is synthetic. The catálogo real rollout (docs/experiments-
+// roadmap.md, Fase operacional punto 4, in ~/yeyo) moved the 10 Exp1-Q6b
+// synthetic atoms — protocolo-hulk included — out of the production
+// yeyo.Get/yeyo.Periferia into ~/yeyo/fixtures (package fixtures), so this
+// file now pulls from there instead; content and names are unchanged. The
+// baseline condition reuses those 10 fixture distractors verbatim (target +
+// 9 distractors — docs/vision.md says "9 atoms" because that described the
+// catalog before Exp1F added 3 "no-obvious" atoms; see build_prompt_YEYO_
+// Q1Q2.md's note and the report's "Nota metodológica"), so it's the exact
+// same catalog Exp1K/1K2 already validated, just one atom bigger;
+// N=20/50/100/200 top that up with
 // synthetic ones.
 package agenthost
 
@@ -26,7 +31,7 @@ import (
 	"math/rand"
 	"strings"
 
-	"github.com/yeyoos/yeyo"
+	"github.com/yeyoos/yeyo/fixtures"
 )
 
 // scaleAtom is the minimal shape the scale experiment needs: enough to
@@ -43,15 +48,18 @@ type scaleAtom struct {
 // "Diseño").
 const targetAtomName = "protocolo-hulk"
 
-// targetAtom fetches the real protocolo-hulk atom from the yeyo package —
-// same name, description, and body the model would see in any other round.
-// Panics on failure: this is throwaway experiment tooling, not production
-// code, and a missing target atom means the environment is broken, not that
-// this corrida should silently run without one.
+// targetAtom fetches the real protocolo-hulk atom from yeyo's fixtures
+// package — same name, description, and body the model would see in any
+// other round. Moved off yeyo.Get when the catálogo real rollout took the
+// 10 Exp1-Q6b synthetic atoms out of the production loader — see docs/
+// experiments-roadmap.md, Fase operacional punto 4, in ~/yeyo. Panics on
+// failure: this is throwaway experiment tooling, not production code, and a
+// missing target atom means the environment is broken, not that this
+// corrida should silently run without one.
 func targetAtom() scaleAtom {
-	a, ok := yeyo.Get(targetAtomName)
+	a, ok := fixtures.GetYeyoAtom(targetAtomName)
 	if !ok {
-		panic(fmt.Sprintf("agenthost: yeyo atom %q not found — is ~/yeyo/atoms/periferia intact?", targetAtomName))
+		panic(fmt.Sprintf("agenthost: yeyo fixture %q not found — is ~/yeyo/fixtures/experimental-atoms intact?", targetAtomName))
 	}
 	return scaleAtom{Name: a.Name, Description: a.Description, Body: a.Body}
 }
@@ -72,7 +80,7 @@ func baselineDistractors() []scaleAtom {
 // atom that isn't today's target" as part of the clean-distractor pool).
 func periferiaDistractorsExcluding(excludeName string) []scaleAtom {
 	var out []scaleAtom
-	for _, a := range yeyo.Periferia() {
+	for _, a := range fixtures.All() {
 		if a.Name == excludeName {
 			continue
 		}

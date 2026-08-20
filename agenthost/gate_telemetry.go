@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/yeyoos/nucleo-base/shared/api"
@@ -75,6 +76,96 @@ func (h *Host) beginGateTurn(ctx context.Context) string {
 		turnID:    turnID,
 	}
 	return turnID
+}
+
+// previousRawInputForSession returns the raw (undecorated) user input the
+// last turn of session sessionID sent, or "" if this is the first turn of
+// the session (or the gate is off, or sessionID is "" — an unpersisted
+// chat, see ContextWithSessionID). rememberRawInputForSession is how it
+// gets populated, right before Run hands the turn to the coordinator.
+//
+// Why a small per-session map here, tracking raw input directly, instead of
+// the tasks_file/progress task-tracking Coordinator already has (ensureTask,
+// runtime.Coordinator.BootstrapTools) — investigated first, per
+// build_prompt_YEYO_FIX_AMBOS.md's instruction not to reinvent it, and it
+// doesn't fit: ensureTask's task-reuse branch (nucleo-base/layer2-runtime-
+// rails/runtime/coordinator_task.go) only activates when Coordinator.Capture
+// is non-nil, and nothing in exo ever sets it (agent.New/runtime.
+// NewCoordinator leave it nil) — every turn today takes ensureTask's other
+// branch, minting a brand-new adhoc-<timestamp> task from just that turn's
+// raw input. That's the same bug in different clothes: a task "description"
+// derived from ensureTask would be "la ruta es agenthost/host.go" on turn 2,
+// not the original ask. Wiring Coordinator.Capture would fix task ID reuse,
+// but ActiveTaskID is only ever cleared by an explicit Recorder.Reset()
+// (meant for "/tab new") — nothing in Coordinator detects a task finishing
+// or the conversation genuinely changing topic mid-session, so once wired it
+// would pin the gate to the *first* task of a session forever, failing this
+// bug's own control case (topic genuinely changes — see gatebug1repro
+// -control). One bounded turn of raw-input lookback doesn't have that
+// failure mode: a topic change just replaces what "previous message" is,
+// every turn, with no completion/reset logic needed.
+//
+// A first version of this fix tried surfacing the same signal through the
+// gate tool's own Definition().Description instead of the conversation
+// content — cheaper (no change to what reaches the model as a real
+// message), and it does reach the model, but reproducing the exact
+// conversation from uso-real-report.md's Conversación 11 with that version
+// in place still produced "skip" (see
+// experiments/fix-contexto-y-lexico-report.md's Bug 1 section for the raw
+// run) — tool-schema text evidently doesn't get the same weight as an
+// actual turn of conversation. This version instead folds it into the
+// prompt string Run hands to coordinator.Run, the same mechanism
+// nucleo-base's own decoratePrompt uses for "[ACTIVE TASK]"/"[PLAN
+// SNAPSHOT]" blocks — content the model actually reads as part of the turn,
+// not metadata about the tools available.
+func (h *Host) previousRawInputForSession(sessionID string) string {
+	if h == nil || !h.gateEnabled || sessionID == "" {
+		return ""
+	}
+	h.gateLastInputMu.Lock()
+	defer h.gateLastInputMu.Unlock()
+	return h.gateLastInput[sessionID]
+}
+
+// rememberRawInputForSession records input (as received by Run, before any
+// decoration) as this session's most recent turn, for the *next* turn's
+// previousRawInputForSession to read. Deliberately stores the raw string,
+// never the gate-augmented one Run actually sends to the coordinator —
+// storing the augmented version would nest a growing chain of "[PREVIOUS
+// MESSAGE]" blocks inside each other, turn after turn.
+func (h *Host) rememberRawInputForSession(sessionID, input string) {
+	if h == nil || !h.gateEnabled || sessionID == "" {
+		return
+	}
+	h.gateLastInputMu.Lock()
+	defer h.gateLastInputMu.Unlock()
+	if h.gateLastInput == nil {
+		h.gateLastInput = make(map[string]string)
+	}
+	h.gateLastInput[sessionID] = input
+}
+
+// gatePreviousMessageBlock wraps prev (a previous turn's raw input) into the
+// "[PREVIOUS MESSAGE]" block Run prepends to this turn's input when the gate
+// is on — see previousRawInputForSession's doc comment for why this exists
+// and why it's scoped to conversation content, not tool metadata. Returns ""
+// for an empty prev (first turn of a session), so callers can no-op cleanly.
+func gatePreviousMessageBlock(prev string) string {
+	prev = truncateRunes(prev, 400)
+	if prev == "" {
+		return ""
+	}
+	return "[PREVIOUS MESSAGE — context only, may or may not still apply]\n" + prev
+}
+
+// truncateRunes trims s to at most n runes, appending "..." when it does.
+func truncateRunes(s string, n int) string {
+	s = strings.TrimSpace(s)
+	runes := []rune(s)
+	if len(runes) <= n {
+		return s
+	}
+	return string(runes[:n]) + "..."
 }
 
 // recordGateDecision is atomsDecisionTool's onDecision hook. yeyo.Periferia

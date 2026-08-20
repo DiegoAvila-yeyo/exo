@@ -69,3 +69,23 @@
   - implementing @ 2026-07-31T20:22:46-06:00
   - done @ 2026-07-31T20:23:10-06:00
   - Added: 2026-07-31T20:22:46-06:00
+- **adhoc-1787155978** [doing] Let's sketch a small diagram called "Order Flow" showing Customer -> Order Service -> Payment -> Warehouse. Once you can...
+  - Notes: ## Turn turn_local_1787155971818_001
+
+- state: done
+- verdict: no_changes
+- transitions:
+  - created @ 2026-08-19T10:12:51-06:00
+  - implementing @ 2026-08-19T10:12:58-06:00
+  - done @ 2026-08-19T10:13:10-06:00
+  - Added: 2026-08-19T10:12:58-06:00
+- **adhoc-1787156048** [doing] Regarding Canvas object "Order Flow" (object_id object-d0546eb1d61d0a0b): Rename the "Customer" node to "Shopper".
+  - Notes: ## Turn turn_local_1787156040807_002
+
+- state: done
+- verdict: no_changes
+- transitions:
+  - created @ 2026-08-19T10:14:00-06:00
+  - implementing @ 2026-08-19T10:14:08-06:00
+  - done @ 2026-08-19T10:14:16-06:00
+  - Added: 2026-08-19T10:14:08-06:00
