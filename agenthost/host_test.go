@@ -77,7 +77,7 @@ func TestTerminalToolsRegisteredWithAdapterBackend(t *testing.T) {
 	manager := sessions.New()
 	adapter := m8adapter.New(manager)
 
-	registry := buildToolRegistry(adapter, nil, &planningContext{}, newNavigateCell(), nil, newCanvasCell(), true)
+	registry := buildToolRegistry(adapter, nil, &planningContext{}, newNavigateCell(), nil, newCanvasCell(), nil, true)
 	assertTerminalToolManager(t, registry, "terminal_open", adapter)
 	assertTerminalToolManager(t, registry, "terminal_read", adapter)
 	assertTerminalToolManager(t, registry, "terminal_write", adapter)
@@ -165,7 +165,7 @@ func TestNewChangesProcessWorkingDirectoryToConfiguredRootPath(t *testing.T) {
 	rootPath := t.TempDir()
 	t.Setenv("EXO_AGENT_ROOT_PATH", rootPath)
 
-	host, err := New(context.Background(), sessions.New(), nil, nil)
+	host, err := New(context.Background(), sessions.New(), nil, nil, nil)
 	if err != nil {
 		t.Fatalf("New returned error: %v", err)
 	}
@@ -208,7 +208,7 @@ func TestSetRootPathChangesWorkingDirectoryAndRebuildsSystemPrompt(t *testing.T)
 	startRoot := t.TempDir()
 	t.Setenv("EXO_AGENT_ROOT_PATH", startRoot)
 
-	host, err := New(context.Background(), sessions.New(), nil, nil)
+	host, err := New(context.Background(), sessions.New(), nil, nil, nil)
 	if err != nil {
 		t.Fatalf("New returned error: %v", err)
 	}
@@ -271,7 +271,7 @@ func TestSetRootPathEmptyPathIsCheapNoOpWhenAlreadyAtOriginalRoot(t *testing.T) 
 	rootPath := t.TempDir()
 	t.Setenv("EXO_AGENT_ROOT_PATH", rootPath)
 
-	host, err := New(context.Background(), sessions.New(), nil, nil)
+	host, err := New(context.Background(), sessions.New(), nil, nil, nil)
 	if err != nil {
 		t.Fatalf("New returned error: %v", err)
 	}
@@ -306,7 +306,7 @@ func TestSetRootPathEmptyPathResetsToOriginalRootAfterProjectSwitch(t *testing.T
 	startRoot := t.TempDir()
 	t.Setenv("EXO_AGENT_ROOT_PATH", startRoot)
 
-	host, err := New(context.Background(), sessions.New(), nil, nil)
+	host, err := New(context.Background(), sessions.New(), nil, nil, nil)
 	if err != nil {
 		t.Fatalf("New returned error: %v", err)
 	}
@@ -351,7 +351,7 @@ func TestNewSucceedsWithNoMCPConfigFile(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("EXO_AGENT_ROOT_PATH", t.TempDir())
 
-	host, err := New(context.Background(), sessions.New(), nil, nil)
+	host, err := New(context.Background(), sessions.New(), nil, nil, nil)
 	if err != nil {
 		t.Fatalf("New returned error: %v", err)
 	}
@@ -379,7 +379,7 @@ func TestNewFailsFastOnMalformedMCPConfig(t *testing.T) {
 		t.Fatalf("WriteFile returned error: %v", err)
 	}
 
-	_, err = New(context.Background(), sessions.New(), nil, nil)
+	_, err = New(context.Background(), sessions.New(), nil, nil, nil)
 	if err == nil {
 		t.Fatal("New returned nil error, want malformed mcp config failure")
 	}
@@ -400,7 +400,7 @@ func TestNewEnablesMemoryWhenStoreOpensSuccessfully(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "test-openai-key")
 	t.Setenv("EXO_AGENT_ROOT_PATH", t.TempDir())
 
-	host, err := New(context.Background(), sessions.New(), nil, nil)
+	host, err := New(context.Background(), sessions.New(), nil, nil, nil)
 	if err != nil {
 		t.Fatalf("New returned error: %v", err)
 	}
@@ -430,7 +430,7 @@ func TestNewContinuesWithMemoryDisabledWhenStoreOpenFails(t *testing.T) {
 		openMemoryStore = originalOpenMemoryStore
 	})
 
-	host, err := New(context.Background(), sessions.New(), nil, nil)
+	host, err := New(context.Background(), sessions.New(), nil, nil, nil)
 	if err != nil {
 		t.Fatalf("New returned error: %v", err)
 	}
@@ -452,7 +452,7 @@ func TestHostCloseClosesMemoryStoreWithoutError(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "test-openai-key")
 	t.Setenv("EXO_AGENT_ROOT_PATH", t.TempDir())
 
-	host, err := New(context.Background(), sessions.New(), nil, nil)
+	host, err := New(context.Background(), sessions.New(), nil, nil, nil)
 	if err != nil {
 		t.Fatalf("New returned error: %v", err)
 	}

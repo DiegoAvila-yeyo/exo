@@ -20,6 +20,21 @@ func TestMCPConfigPathUnderAppSupportDir(t *testing.T) {
 	}
 }
 
+func TestSessionRecallStoreDirUnderAppSupportDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	got, err := SessionRecallStoreDir()
+	if err != nil {
+		t.Fatalf("SessionRecallStoreDir returned error: %v", err)
+	}
+
+	want := filepath.Join(home, "Library", "Application Support", AppName, "session_recall")
+	if got != want {
+		t.Fatalf("SessionRecallStoreDir = %q, want %q", got, want)
+	}
+}
+
 func TestMemoryDBPathUnderAppSupportDir(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

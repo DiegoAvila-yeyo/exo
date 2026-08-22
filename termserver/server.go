@@ -1,6 +1,7 @@
 package termserver
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
@@ -16,8 +17,10 @@ import (
 
 	"github.com/DiegoAvila-yeyo/exo/projects"
 	"github.com/DiegoAvila-yeyo/exo/ptyactor"
+	"github.com/DiegoAvila-yeyo/exo/sessionrecall"
 	"github.com/DiegoAvila-yeyo/exo/sessions"
 	"github.com/gorilla/websocket"
+	"github.com/yeyoos/nucleo-base/shared/api"
 )
 
 const (
@@ -73,7 +76,23 @@ type Server struct {
 	scanProjects    projectScanner
 	planning        planningStore
 	canvas          canvasStore
+	sessionRecall   sessionRecallStore
+	summarizer      SessionSummarizer
 }
+
+// sessionRecallStore is the subset of *sessionrecall.Store the server
+// needs — mirrors chatSessionStore/canvasStore's decoupling pattern.
+type sessionRecallStore interface {
+	Load(projectID string) (sessionrecall.ProjectRecall, error)
+	Save(pr sessionrecall.ProjectRecall) (sessionrecall.ProjectRecall, error)
+}
+
+// SessionSummarizer runs the separate, minimal summarization call
+// (build_prompt_SESSION_RECALL.md, piece 6, step 1) over a session's title
+// + transcript, producing {title, description, summary_body}. Matches
+// agenthost.Host.SummarizeSession's exact method signature so backend.go
+// can wire host.SummarizeSession in directly as a method value.
+type SessionSummarizer func(ctx context.Context, title string, messages []api.Message) (string, string, string, error)
 
 type sessionHub struct {
 	clients map[*wsClient]struct{}
@@ -149,6 +168,24 @@ func WithPlanningStore(store planningStore) Option {
 func WithCanvasStore(store canvasStore) Option {
 	return func(server *Server) {
 		server.canvas = store
+	}
+}
+
+// WithSessionRecallStore enables the "Sesiones" close-and-summarize
+// endpoint (POST /api/chat/sessions/{id}/close). Without it (or without
+// WithSessionSummarizer), that endpoint responds 503 "session recall is not
+// configured" — same optional-store shape as WithCanvasStore.
+func WithSessionRecallStore(store sessionRecallStore) Option {
+	return func(server *Server) {
+		server.sessionRecall = store
+	}
+}
+
+// WithSessionSummarizer supplies the close endpoint's summarization call —
+// see SessionSummarizer's doc comment.
+func WithSessionSummarizer(fn SessionSummarizer) Option {
+	return func(server *Server) {
+		server.summarizer = fn
 	}
 }
 

@@ -23,6 +23,10 @@
     chatSubmitButton: document.getElementById("chat-submit-button"),
     chatStatusIndicator: document.getElementById("chat-status-indicator"),
     chatFeedback: document.getElementById("chat-feedback"),
+    sessionCloseBanner: document.getElementById("session-close-banner"),
+    sessionCloseText: document.getElementById("session-close-text"),
+    sessionCloseButton: document.getElementById("session-close-button"),
+    sessionCloseDismiss: document.getElementById("session-close-dismiss"),
     chatPanel: document.getElementById("chat-panel"),
     newChatButton: document.getElementById("new-chat-button"),
     approvalBanner: document.getElementById("approval-banner"),
@@ -36,6 +40,8 @@
     chatSectionToggle: document.getElementById("chat-section-toggle"),
     chatPowerToggle: document.getElementById("chat-power-toggle"),
     projectSectionToggle: document.getElementById("project-section-toggle"),
+    projectRootName: document.getElementById("project-root-name"),
+    projectRootAdd: document.getElementById("project-root-add"),
     projectList: document.getElementById("project-list"),
     homeView: document.getElementById("home-view"),
     planningNavItem: document.getElementById("planning-nav-item"),
@@ -54,6 +60,12 @@
     planningCanvasPlaceholder: document.getElementById("planning-canvas-placeholder"),
     planningChatSlot: document.getElementById("planning-chat-slot"),
     canvasView: document.getElementById("canvas-view"),
+    canvasDiagramArea: document.getElementById("canvas-diagram-area"),
+    lowerChatLog: document.getElementById("lower-chat-log"),
+    lowerChatForm: document.getElementById("lower-chat-form"),
+    lowerChatInput: document.getElementById("lower-chat-input"),
+    canvasFolderMarker: document.getElementById("canvas-folder-marker"),
+    canvasFolderBackButton: document.getElementById("canvas-folder-back-button"),
     canvasEmptyState: document.getElementById("canvas-empty-state"),
     canvasObjects: document.getElementById("canvas-objects"),
     canvasSuggestBanner: document.getElementById("canvas-suggest-banner"),
@@ -109,6 +121,13 @@
     chatReconnectTimer: null,
     chatReconnectAttempt: 0,
     chatStatus: "idle",
+    // 2026-08-21 UI design round: true from the moment a message is sent
+    // until the first real "output" chunk (or the turn ending) arrives —
+    // renderChatLog shows a "thinking" row while it's true. Needed more
+    // than ever after the chat_output_filter.go fix: the browser now sees
+    // *nothing* until "=== FINAL ===", which can take a while, so the
+    // silent gap this covers got longer, not shorter.
+    chatThinking: false,
     pendingApproval: null,
     chatSessions: [],
     activeChatSessionId: null,
@@ -117,6 +136,21 @@
     // "Recent" down to that project's sessions.
     activeProjectPath: null,
     activeProjectName: null,
+    // 2026-08-21 UI design round: the global "Recent" list is hidden now —
+    // sessions are grouped under each project instead, Claude-Code-desktop
+    // style (project name as a group header, its sessions listed directly
+    // below, collapsible via a chevron), plus one more group for the root
+    // itself (sessions with no project_path). Keyed by project.path, or
+    // buildGroup's ROOT_SESSIONS_KEY ("") for the root group — undefined
+    // (never toggled) falls back to that group's own defaultExpanded (true
+    // for real projects, false for root: this repo alone had 194
+    // project-less legacy sessions, so opening that flat by default would
+    // bury every real project below it). Independent of activeProjectPath:
+    // collapsing/expanding a group doesn't change which project is active,
+    // and opening a session from any group doesn't either (same rule
+    // openChatSession already followed).
+    expandedProjectSessions: {},
+    projects: [], // last-loaded /api/projects list, kept so renderProjectList can re-run without refetching
     // --- Planning (Round 1) ---
     view: "home", // "home" | "planning-list" | "planning-board"
     plannings: [],
@@ -130,6 +164,25 @@
     canvas: null, // last-fetched ProjectCanvas (or null before first fetch)
     activeCanvasObjectId: null, // which object the floating panel currently has open
     pendingCanvasSuggestion: null, // {object_id, name} from the most recent canvas_suggest SSE event
+    // 2026-08-20 UI design round: the diagram area starts collapsed behind
+    // the "diagramas" folder marker; clicking it reveals the materialized
+    // diagrams as small file-style thumbnails, clicking one of those
+    // expands it to the full diagram. Two levels of "back": expanded ->
+    // grid, grid -> closed. Purely view-state, doesn't touch canvasstore
+    // data.
+    canvasFolderOpen: false,
+    expandedCanvasObjectId: null,
+    // --- Sesiones (session recall) ---
+    // Whether the currently open chat session is closed — set from
+    // openChatSession's own load and from the close endpoint's response.
+    // Closed is terminal: the composer is disabled and no new /api/chat
+    // POST is attempted while this is true (server also rejects it).
+    activeChatSessionClosed: false,
+    // true once this session's own "usage" SSE event crossed
+    // closeSessionWarnThreshold — drives the persistent banner above
+    // chat-log. Dismissing it just hides it for this session; it does not
+    // come back until another "usage" event re-crosses the threshold.
+    sessionCloseBannerDismissed: false,
   };
 
   // Where #chat-panel lives when no Planning board is open — captured once
@@ -262,6 +315,10 @@
     if (!message) {
       return;
     }
+    if (state.activeChatSessionClosed) {
+      setChatFeedback("This session is closed. Start a new chat to continue.");
+      return;
+    }
     setChatFeedback("");
     setChatSubmitting(true);
     try {
@@ -295,9 +352,11 @@
       if (response && response.session_id && response.session_id !== state.activeChatSessionId) {
         setActiveChatSession(response.session_id);
       }
+      state.chatThinking = true;
       appendChatEntry("You: " + message, "system");
       refs.chatInput.value = "";
     } catch (error) {
+      state.chatThinking = false;
       if (error && error.message === "busy") {
         setChatFeedback("The agent is already working on another request.");
       } else {
@@ -393,6 +452,14 @@
     }
   });
 
+  // Root-level "+" (2026-08-21 round): same action as the top "New chat"
+  // button — no project picker of its own, since one click on any
+  // project's own "+" already covers "new chat in a specific project".
+  refs.projectRootAdd.addEventListener("click", function () {
+    showHomeView();
+    startNewChat();
+  });
+
   refs.suggestionChips.forEach(function (chip) {
     chip.addEventListener("click", function () {
       const prompt = chip.getAttribute("data-prompt") || "";
@@ -445,6 +512,10 @@
       const sessions = await fetchJSON("/api/chat/sessions", {method: "GET"});
       state.chatSessions = Array.isArray(sessions) ? sessions : [];
       renderChatSessionList();
+      // "Recent" itself is hidden (2026-08-21 round), but each project's
+      // "Sessions" tab reads from the same state.chatSessions — keep it in
+      // sync too, or an expanded tab would go stale after a new turn.
+      renderProjectList();
     } catch (error) {
       // Non-fatal: the sidebar just stays empty/stale. The main chat still works.
     }
@@ -504,9 +575,31 @@
       refs.chatInput.value = "";
       renderChatLog();
       renderChatSessionList();
+      renderProjectList(); // updates the "active" mark inside its Sessions tab too
+      // Closed is terminal (Sesiones) — reopening a closed session shows its
+      // transcript read-only; the composer stays disabled until a new
+      // session is started. The banner belongs only to the session that
+      // triggered it, so switching sessions always resets its state.
+      state.activeChatSessionClosed = session.status === "closed";
+      state.sessionCloseBannerDismissed = false;
+      hideSessionCloseBanner();
+      updateChatComposerDisabled();
     } catch (error) {
       setChatFeedback(error.message || "Could not open that chat.");
     }
+  }
+
+  // Disables the composer while the active session is closed — the human's
+  // path to continue is a new session (New chat), never posting into this
+  // one. Server-side, /api/chat rejects it too (termserver/chat.go); this
+  // is the client-side half of the same rule.
+  function updateChatComposerDisabled() {
+    const closed = state.activeChatSessionClosed;
+    refs.chatInput.disabled = closed;
+    refs.chatSubmitButton.disabled = closed;
+    refs.chatInput.placeholder = closed
+      ? "This session is closed — start a new chat to continue."
+      : "Ask the agent to inspect, run, or explain something";
   }
 
   function setActiveChatSession(id) {
@@ -532,35 +625,193 @@
     refs.projectList.hidden = !expanded;
   }
 
+  // Every project is a direct child of the same root (the server scans one
+  // fixed s.projectRoot — the home dir, see backend.go — and that root
+  // itself is never sent over the API, only the projects inside it). The
+  // root's own name is just the parent directory of any project's path, so
+  // it's derived here instead of asking the server for something new.
+  function rootFolderNameFromProjectPath(path) {
+    const trimmed = path.replace(/\/+$/, "");
+    const parent = trimmed.slice(0, trimmed.lastIndexOf("/"));
+    const name = parent.slice(parent.lastIndexOf("/") + 1);
+    return name || "Projects";
+  }
+
   async function loadProjectList() {
     try {
       const list = await fetchJSON("/api/projects", {method: "GET"});
-      renderProjectList(Array.isArray(list) ? list : []);
+      state.projects = Array.isArray(list) ? list : [];
     } catch (error) {
-      renderProjectList([]);
+      state.projects = [];
     }
+    if (state.projects.length > 0) {
+      refs.projectRootName.textContent = rootFolderNameFromProjectPath(state.projects[0].path);
+    }
+    renderProjectList();
   }
 
-  function renderProjectList(list) {
+  // Builds a .chat-session-list of session buttons (dot + bold title,
+  // active one highlighted) — shared by the root's own sessions (below)
+  // and every project group, so both look and behave identically.
+  function buildSessionsListElement(sessions) {
+    const sessionsList = document.createElement("div");
+    sessionsList.className = "chat-session-list";
+    // Sesiones: closed sessions sort below open ones within this group —
+    // metadata, not something competing for attention with active work.
+    // Array.prototype.sort is stable in every browser this app targets, so
+    // sessions keep their existing (already most-recently-updated-first)
+    // order within each of the two buckets.
+    const sorted = sessions.slice().sort(function (a, b) {
+      return (a.status === "closed" ? 1 : 0) - (b.status === "closed" ? 1 : 0);
+    });
+    sorted.forEach(function (session) {
+      const closed = session.status === "closed";
+      const sessionItem = document.createElement("button");
+      sessionItem.type = "button";
+      sessionItem.className = "chat-session-item" +
+        (session.id === state.activeChatSessionId ? " active" : "") +
+        (closed ? " chat-session-item--closed" : "");
+      sessionItem.innerHTML = "<span class=\"chat-session-item__dot\" aria-hidden=\"true\">○</span><span></span>";
+      sessionItem.querySelector("span:last-child").textContent = session.title || "New chat";
+      if (closed) {
+        const badge = document.createElement("span");
+        badge.className = "chat-session-item__badge";
+        badge.textContent = "Closed";
+        sessionItem.appendChild(badge);
+      }
+      sessionItem.title = session.title || "New chat";
+      sessionItem.addEventListener("click", function () {
+        openChatSession(session.id);
+      });
+      sessionsList.appendChild(sessionItem);
+    });
+    return sessionsList;
+  }
+
+  // Sentinel key for the root's own group in state.expandedProjectSessions
+  // — real projects are keyed by their (always non-empty) path, so "" can
+  // never collide with one.
+  const ROOT_SESSIONS_KEY = "";
+
+  // One collapsible group: header (chevron + name, click selects + toggles)
+  // with an optional "+", and its sessions listed beneath when expanded.
+  // Shared by the root's own ungrouped sessions and every real project, so
+  // both look and behave identically — defaultExpanded is the only real
+  // difference between the two call sites (see renderProjectList).
+  function buildGroup(key, name, sessions, options) {
+    const opts = options || {};
+    const group = document.createElement("div");
+    group.className = "project-group";
+
+    // undefined (never toggled) falls back to defaultExpanded.
+    const stored = state.expandedProjectSessions[key];
+    const expanded = stored === undefined ? !!opts.defaultExpanded : stored;
+
+    const header = document.createElement("div");
+    header.className = "project-group-header";
+
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "project-group-toggle" + (opts.active ? " active" : "");
+    toggle.setAttribute("aria-expanded", expanded ? "true" : "false");
+    toggle.innerHTML =
+      "<span class=\"project-group-chevron\" aria-hidden=\"true\">⌄</span>" +
+      "<span class=\"project-group-name\"></span>";
+    toggle.querySelector(".project-group-name").textContent = name;
+    if (opts.title) {
+      toggle.title = opts.title;
+    }
+    toggle.addEventListener("click", function () {
+      if (opts.onSelect) {
+        opts.onSelect();
+      }
+      state.expandedProjectSessions[key] = !expanded;
+      renderProjectList();
+    });
+    header.appendChild(toggle);
+
+    if (opts.onAdd) {
+      const addButton = document.createElement("button");
+      addButton.type = "button";
+      addButton.className = "project-group-add";
+      addButton.textContent = "+";
+      addButton.setAttribute("aria-label", "New chat in " + name);
+      addButton.title = "New chat in " + name;
+      addButton.addEventListener("click", function (event) {
+        event.stopPropagation(); // don't also trigger the header's toggle
+        state.expandedProjectSessions[key] = true;
+        opts.onAdd();
+        renderProjectList();
+      });
+      header.appendChild(addButton);
+    }
+
+    group.appendChild(header);
+
+    if (expanded) {
+      const sessionsList = buildSessionsListElement(sessions);
+      sessionsList.classList.add("project-group-sessions");
+      group.appendChild(sessionsList);
+    }
+
+    return group;
+  }
+
+  // 2026-08-21: redesigned to match the Claude Code desktop sidebar the
+  // human pointed to — each project is a group header (name + a "+" to
+  // start a new chat there) with its sessions listed directly beneath,
+  // collapsible via a chevron but expanded by default (no extra click
+  // needed to see them, unlike the previous "Sessions" sub-tab). The root
+  // itself gets its own group too, for sessions with no project_path at
+  // all (created before a project was ever picked) — collapsed by default,
+  // unlike real projects: this repo alone had 194 of them, and showing
+  // that flat list open by default would bury every real project below a
+  // wall of legacy sessions. Reads from
+  // state.projects/state.chatSessions/state.expandedProjectSessions rather
+  // than taking params so any caller (a group's chevron, a session
+  // refresh) can just call renderProjectList() for a consistent re-render.
+  function renderProjectList() {
     refs.projectList.innerHTML = "";
+
+    const rootSessions = state.chatSessions.filter(function (session) {
+      return !session.project_path;
+    });
+    if (rootSessions.length > 0) {
+      refs.projectList.appendChild(buildGroup(
+        ROOT_SESSIONS_KEY,
+        "Sin proyecto (" + rootSessions.length + ")",
+        rootSessions,
+        {defaultExpanded: false}
+      ));
+    }
+
+    const list = state.projects;
     if (list.length === 0) {
-      const empty = document.createElement("p");
-      empty.className = "sidebar-placeholder";
-      empty.textContent = "No projects found.";
-      refs.projectList.appendChild(empty);
+      if (rootSessions.length === 0) {
+        const empty = document.createElement("p");
+        empty.className = "sidebar-placeholder";
+        empty.textContent = "No projects found.";
+        refs.projectList.appendChild(empty);
+      }
       return;
     }
     list.forEach(function (project) {
-      const item = document.createElement("button");
-      item.type = "button";
-      item.className = "chat-session-item" + (project.path === state.activeProjectPath ? " active" : "");
-      item.textContent = project.name;
-      item.title = project.path;
-      item.addEventListener("click", function () {
-        setActiveProject(project.name, project.path);
-        renderProjectList(list); // re-mark which row is active
+      const sessions = state.chatSessions.filter(function (session) {
+        return session.project_path === project.path;
       });
-      refs.projectList.appendChild(item);
+      refs.projectList.appendChild(buildGroup(project.path, project.name, sessions, {
+        defaultExpanded: true,
+        active: project.path === state.activeProjectPath,
+        title: project.path,
+        // A single click both selects this project (as before) and
+        // toggles its group open/closed — the reference design doesn't
+        // separate those two actions into different controls.
+        onSelect: function () { setActiveProject(project.name, project.path); },
+        onAdd: function () {
+          setActiveProject(project.name, project.path);
+          startNewChat();
+        },
+      }));
     });
   }
 
@@ -1113,13 +1364,17 @@
     switch (event.type) {
       case "idle":
         state.chatStatus = "idle";
+        state.chatThinking = false;
         updateChatStatus();
+        renderChatLog();
         break;
       case "busy":
         state.chatStatus = "busy";
         updateChatStatus();
         break;
       case "output":
+        // Real content arrived — the thinking row's job is done.
+        state.chatThinking = false;
         appendChatEntry(event.text || "");
         break;
       case "approval":
@@ -1137,6 +1392,12 @@
         break;
       case "done":
         state.chatStatus = "idle";
+        // Safety net for a turn that produced zero "output" events (e.g.
+        // an immediate error) — don't leave the thinking row stuck.
+        if (state.chatThinking) {
+          state.chatThinking = false;
+          renderChatLog();
+        }
         updateChatStatus();
         // The server only knows a session's final title (derived from the
         // first message) once the turn completes — refresh so the sidebar
@@ -1156,10 +1417,74 @@
       case "canvas_suggest":
         showCanvasSuggestBanner({object_id: event.object_id, name: event.name});
         break;
+      case "usage":
+        handleUsageEvent(event);
+        break;
       default:
         break;
     }
   }
+
+  // --- Sesiones: context-window warning banner ---
+  //
+  // Only ever reacts to a "usage" event for the session currently open in
+  // this tab — every connected tab gets the event (no server-side
+  // per-client routing, same as navigate/canvas_suggest), so a background
+  // session's usage must never pop a banner over whatever the human is
+  // actually looking at.
+  const SESSION_CLOSE_WARN_THRESHOLD = 85;
+
+  function handleUsageEvent(event) {
+    if (event.session_id !== state.activeChatSessionId) {
+      return;
+    }
+    if (event.context_pct >= SESSION_CLOSE_WARN_THRESHOLD) {
+      if (!state.sessionCloseBannerDismissed) {
+        showSessionCloseBanner(event.context_pct);
+      }
+    } else {
+      hideSessionCloseBanner();
+    }
+  }
+
+  function showSessionCloseBanner(pct) {
+    refs.sessionCloseText.textContent =
+      "This session's context window is " + Math.round(pct) + "% full. Close it to save a summary, then start a new session.";
+    refs.sessionCloseBanner.hidden = false;
+  }
+
+  function hideSessionCloseBanner() {
+    refs.sessionCloseBanner.hidden = true;
+  }
+
+  refs.sessionCloseDismiss.addEventListener("click", function () {
+    state.sessionCloseBannerDismissed = true;
+    hideSessionCloseBanner();
+  });
+
+  refs.sessionCloseButton.addEventListener("click", async function () {
+    if (!state.activeChatSessionId) {
+      return;
+    }
+    const closingID = state.activeChatSessionId;
+    refs.sessionCloseButton.disabled = true;
+    try {
+      await fetchJSON("/api/chat/sessions/" + encodeURIComponent(closingID) + "/close?csrf_token=" + encodeURIComponent(csrf), {
+        method: "POST",
+      });
+      hideSessionCloseBanner();
+      setChatFeedback("Session closed and summarized.");
+      // Reopen the same session — now read-only — so the UI (composer
+      // disabled, "Closed" badge) reflects its new state immediately,
+      // matching how any other closed session already renders.
+      await openChatSession(closingID);
+      await refreshChatSessions();
+    } catch (error) {
+      setChatFeedback(error.message || "Could not close session.");
+    } finally {
+      refs.sessionCloseButton.disabled = false;
+    }
+  });
 
   function handleStatusMessage(raw) {
     let message;
@@ -1333,12 +1658,60 @@
     }
 
     entries.forEach(function (entry) {
+      // 2026-08-21 UI design round: a small blue animated avatar next to
+      // every agent reply, Kimi-style — "system"-kind entries are always
+      // the human's own echoed message (see appendChatEntry's "You: "
+      // call site), so that's the only kind that skips the avatar.
+      const isAgent = entry.kind !== "system";
+      const row = document.createElement("div");
+      row.className = "chat-row" + (isAgent ? " chat-row--agent" : " chat-row--user");
+
+      if (isAgent) {
+        const avatar = document.createElement("div");
+        avatar.className = "chat-avatar";
+        avatar.setAttribute("aria-hidden", "true");
+        row.appendChild(avatar);
+      }
+
       const line = document.createElement("p");
       line.className = "chat-entry" + (entry.kind ? " " + entry.kind : "");
       line.textContent = entry.text;
-      refs.chatLog.appendChild(line);
+      row.appendChild(line);
+
+      refs.chatLog.appendChild(row);
     });
+
+    if (state.chatThinking) {
+      refs.chatLog.appendChild(renderThinkingRow());
+    }
+
     refs.chatLog.scrollTop = refs.chatLog.scrollHeight;
+  }
+
+  // Same avatar as an agent reply, three breathing dots instead of text —
+  // shown from submit until the first real "output" chunk (or the turn's
+  // end) arrives. See state.chatThinking's doc comment for why this
+  // matters more now than before chat_output_filter.go existed.
+  function renderThinkingRow() {
+    const row = document.createElement("div");
+    row.className = "chat-row chat-row--agent";
+
+    const avatar = document.createElement("div");
+    avatar.className = "chat-avatar";
+    avatar.setAttribute("aria-hidden", "true");
+    row.appendChild(avatar);
+
+    const bubble = document.createElement("p");
+    bubble.className = "chat-entry chat-entry--thinking";
+    bubble.setAttribute("aria-label", "The agent is thinking");
+    for (let i = 0; i < 3; i++) {
+      const dot = document.createElement("span");
+      dot.className = "chat-thinking-dot";
+      bubble.appendChild(dot);
+    }
+    row.appendChild(bubble);
+
+    return row;
   }
 
   function appendChatEntry(text, kind) {
@@ -1354,6 +1727,10 @@
   function resetChatView() {
     refs.chatLog.dataset.entries = JSON.stringify([]);
     refs.chatInput.value = "";
+    state.activeChatSessionClosed = false;
+    state.sessionCloseBannerDismissed = false;
+    hideSessionCloseBanner();
+    updateChatComposerDisabled();
     refs.approvalBanner.hidden = true;
     refs.approvalSession.hidden = true;
     refs.approvalSession.textContent = "";
@@ -1362,6 +1739,7 @@
     refs.approvalDetail.textContent = "";
     state.pendingApproval = null;
     state.chatStatus = "idle";
+    state.chatThinking = false;
     updateChatStatus();
     setChatFeedback("");
     renderChatLog();
@@ -1545,14 +1923,32 @@
       body: JSON.stringify(body),
     });
     const text = await response.text();
-    const payload = text ? JSON.parse(text) : null;
     if (!response.ok) {
-      if (payload && payload.error) {
-        throw new Error(payload.error);
-      }
-      throw new Error(text || ("Request failed with status " + response.status));
+      throw new Error(errorMessageFromResponseText(text, response.status));
     }
-    return payload;
+    return text ? JSON.parse(text) : null;
+  }
+
+  // 2026-08-21: error bodies aren't always JSON — a security check that
+  // rejects a request before it ever reaches a JSON-writing handler (e.g.
+  // security.go's CSRF check) responds with plain text, and blindly
+  // JSON.parse-ing that ("csrf token mismatch") threw its own confusing
+  // "Unexpected token" SyntaxError instead of surfacing the real message.
+  // Success responses in this app are always JSON (never called on the ok
+  // path) — only error bodies need this tolerance.
+  function errorMessageFromResponseText(text, status) {
+    if (!text) {
+      return "Request failed with status " + status;
+    }
+    try {
+      const payload = JSON.parse(text);
+      if (payload && payload.error) {
+        return payload.error;
+      }
+    } catch (parseError) {
+      // Not JSON — fall through and use the raw text below.
+    }
+    return text;
   }
 
   // patchJSON mirrors postJSON but for PATCH — the manual-edit write path's
@@ -1570,14 +1966,10 @@
       body: JSON.stringify(body),
     });
     const text = await response.text();
-    const payload = text ? JSON.parse(text) : null;
     if (!response.ok) {
-      if (payload && payload.error) {
-        throw new Error(payload.error);
-      }
-      throw new Error(text || ("Request failed with status " + response.status));
+      throw new Error(errorMessageFromResponseText(text, response.status));
     }
-    return payload;
+    return text ? JSON.parse(text) : null;
   }
 
   // --- Canvas: sidebar (unchanged) / canvas center / chat right. Fetches
@@ -1623,51 +2015,128 @@
     return atom ? atom.body : null;
   }
 
+  // Three levels, per the 2026-08-20 UI design round: closed (just the
+  // "diagramas" folder marker) -> grid (small file-style thumbnails, one
+  // per materialized diagram) -> expanded (one diagram, full size). "Back"
+  // always steps up exactly one level. None of this touches canvasstore
+  // data — it's only what render() draws.
   function renderCanvasView() {
     refs.canvasObjects.innerHTML = "";
+    refs.canvasEmptyState.hidden = true;
+
     const objects = materializedCanvasObjects();
-    // Toggled from JS rather than a CSS :empty ~ sibling rule: the empty
-    // state markup sits *before* #canvas-objects in the DOM (index.html),
-    // and sibling combinators only ever select later siblings, so a
-    // :empty ~ rule here could never match — hidden/visible has to be
-    // driven explicitly, the same way every other conditional panel in
-    // this app (approval-banner, chat-feedback, ...) already does it.
-    refs.canvasEmptyState.hidden = objects.length > 0;
+    const expanded = state.expandedCanvasObjectId
+      ? objects.find(function (o) { return o.object_id === state.expandedCanvasObjectId; })
+      : null;
+    // The expanded object may have been deactivated/deleted from under us
+    // (e.g. edited in another tab) — fall back to the grid instead of
+    // rendering a stale/missing diagram.
+    if (state.expandedCanvasObjectId && !expanded) {
+      state.expandedCanvasObjectId = null;
+    }
+
+    refs.canvasFolderMarker.hidden = state.canvasFolderOpen;
+    refs.canvasFolderBackButton.hidden = !state.canvasFolderOpen;
+    refs.canvasDiagramArea.classList.toggle("canvas-diagram-area--open", state.canvasFolderOpen);
+    refs.canvasObjects.classList.toggle("canvas-objects--grid", state.canvasFolderOpen && !expanded);
+    refs.canvasObjects.classList.toggle("canvas-objects--expanded", state.canvasFolderOpen && !!expanded);
+
+    if (!state.canvasFolderOpen) {
+      return;
+    }
+
+    if (expanded) {
+      refs.canvasObjects.appendChild(renderExpandedDiagram(expanded));
+      return;
+    }
+
     objects.forEach(function (obj) {
-      const card = document.createElement("div");
-      card.className = "canvas-object-card";
-      card.tabIndex = 0;
-      card.setAttribute("role", "button");
-
-      const header = document.createElement("div");
-      header.className = "canvas-object-card__header";
-      const name = document.createElement("span");
-      name.className = "canvas-object-card__name";
-      name.textContent = obj.name;
-      const badge = document.createElement("span");
-      badge.className = "canvas-object-card__badge";
-      badge.dataset.active = obj.activation === "active" ? "true" : "false";
-      badge.textContent = obj.activation === "active" ? "Active" : obj.type;
-      header.appendChild(name);
-      header.appendChild(badge);
-      card.appendChild(header);
-
-      if (obj.type === "diagram") {
-        const body = currentAtomBody(obj.object_id) || obj.payload;
-        card.appendChild(renderDiagramStage(body));
-      }
-
-      const open = function () { openCanvasObjectPanel(obj.object_id); };
-      card.addEventListener("click", open);
-      card.addEventListener("keydown", function (event) {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          open();
-        }
-      });
-
-      refs.canvasObjects.appendChild(card);
+      refs.canvasObjects.appendChild(renderDiagramThumbnail(obj));
     });
+  }
+
+  // A small "file" thumbnail: fixed-size preview box (the diagram scaled
+  // down to fit) with the object's name below it, grid-arranged like
+  // Finder icon view. Click expands it — editing still happens one level
+  // deeper, from the expanded view.
+  function renderDiagramThumbnail(obj) {
+    const file = document.createElement("div");
+    file.className = "canvas-diagram-file";
+    file.tabIndex = 0;
+    file.setAttribute("role", "button");
+
+    const thumb = document.createElement("div");
+    thumb.className = "canvas-diagram-thumb";
+    if (obj.type === "diagram") {
+      const body = currentAtomBody(obj.object_id) || obj.payload;
+      const stage = renderDiagramStage(body);
+      // The stage carries its own explicit px width/height (set in
+      // renderDiagramStage from the diagram's layout) — scale it down to
+      // fit inside the fixed thumbnail box instead of cropping it, same
+      // "contain" idea as a file manager's image thumbnails. Never
+      // upscale a diagram that's already smaller than the box.
+      const stageW = parseFloat(stage.style.width) || 300;
+      const stageH = parseFloat(stage.style.height) || 160;
+      const scale = Math.min(108 / stageW, 72 / stageH, 1);
+      stage.style.transform = "scale(" + scale + ")";
+      thumb.appendChild(stage);
+    }
+    file.appendChild(thumb);
+
+    const name = document.createElement("span");
+    name.className = "canvas-diagram-file__name";
+    name.textContent = obj.name;
+    file.appendChild(name);
+
+    const expand = function () {
+      state.expandedCanvasObjectId = obj.object_id;
+      renderCanvasView();
+    };
+    file.addEventListener("click", expand);
+    file.addEventListener("keydown", function (event) {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        expand();
+      }
+    });
+
+    return file;
+  }
+
+  // Full-size diagram, header with name/active badge + an explicit Edit
+  // button (the manual/mini-chat panel from before — unchanged).
+  function renderExpandedDiagram(obj) {
+    const wrap = document.createElement("div");
+    wrap.className = "canvas-diagram-expanded";
+
+    const header = document.createElement("div");
+    header.className = "canvas-object-card__header";
+    const name = document.createElement("span");
+    name.className = "canvas-object-card__name";
+    name.textContent = obj.name;
+    const badge = document.createElement("span");
+    badge.className = "canvas-object-card__badge";
+    badge.dataset.active = obj.activation === "active" ? "true" : "false";
+    badge.textContent = obj.activation === "active" ? "Active" : obj.type;
+    const editButton = document.createElement("button");
+    editButton.type = "button";
+    editButton.className = "ghost-button";
+    editButton.textContent = "Edit";
+    editButton.addEventListener("click", function () { openCanvasObjectPanel(obj.object_id); });
+    header.appendChild(name);
+    header.appendChild(badge);
+    header.appendChild(editButton);
+    wrap.appendChild(header);
+
+    if (obj.type === "diagram") {
+      const body = currentAtomBody(obj.object_id) || obj.payload;
+      const stageWrap = document.createElement("div");
+      stageWrap.className = "canvas-diagram-expanded__stage";
+      stageWrap.appendChild(renderDiagramStage(body));
+      wrap.appendChild(stageWrap);
+    }
+
+    return wrap;
   }
 
   // autoLayoutNodes assigns a simple left-to-right, wrapping grid position
@@ -1986,6 +2455,68 @@
     state.pendingCanvasSuggestion = null;
     refs.canvasSuggestBanner.hidden = true;
   }
+
+  refs.canvasFolderMarker.addEventListener("click", function () {
+    state.canvasFolderOpen = true;
+    state.expandedCanvasObjectId = null;
+    renderCanvasView();
+  });
+
+  refs.canvasFolderBackButton.addEventListener("click", function () {
+    if (state.expandedCanvasObjectId) {
+      state.expandedCanvasObjectId = null;
+    } else {
+      state.canvasFolderOpen = false;
+    }
+    renderCanvasView();
+  });
+
+  // Lower panel's "second chat" (2026-08-21 UI design round) — UI-only by
+  // deliberate choice: local echo of whatever's typed, nothing sent to
+  // /api/chat, no session, no agent reply. What this chat is actually for
+  // (multi-AI? something else?) is still undecided — this just gives the
+  // design something concrete to react to. renderLowerChat/lowerChatEntries
+  // mirror renderChatLog/appendChatEntry's shape on purpose so upgrading
+  // this to something real later is a small diff, not a rewrite.
+  let lowerChatEntries = [];
+
+  function renderLowerChat() {
+    refs.lowerChatLog.innerHTML = "";
+    if (lowerChatEntries.length === 0) {
+      const empty = document.createElement("p");
+      empty.className = "lower-chat-empty muted";
+      empty.textContent = "Nothing here yet — this is a second chat, still just a mockup.";
+      refs.lowerChatLog.appendChild(empty);
+      return;
+    }
+    lowerChatEntries.forEach(function (entry) {
+      const row = document.createElement("div");
+      row.className = "chat-row" + (entry.isAgent ? " chat-row--agent" : " chat-row--user");
+      if (entry.isAgent) {
+        const avatar = document.createElement("div");
+        avatar.className = "chat-avatar";
+        avatar.setAttribute("aria-hidden", "true");
+        row.appendChild(avatar);
+      }
+      const bubble = document.createElement("p");
+      bubble.className = "chat-entry" + (entry.isAgent ? "" : " system");
+      bubble.textContent = entry.text;
+      row.appendChild(bubble);
+      refs.lowerChatLog.appendChild(row);
+    });
+    refs.lowerChatLog.scrollTop = refs.lowerChatLog.scrollHeight;
+  }
+
+  refs.lowerChatForm.addEventListener("submit", function (event) {
+    event.preventDefault();
+    const message = refs.lowerChatInput.value.trim();
+    if (!message) {
+      return;
+    }
+    lowerChatEntries.push({text: message, isAgent: false});
+    refs.lowerChatInput.value = "";
+    renderLowerChat();
+  });
 
   refs.canvasSuggestDismiss.addEventListener("click", hideCanvasSuggestBanner);
 

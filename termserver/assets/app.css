@@ -236,12 +236,150 @@ button {
   display: none;
 }
 
+#recent-chats-section {
+  display: none;
+}
+
 .sidebar-placeholder {
   margin: 0;
   padding: 0 14px;
   color: #7a7a7a;
   line-height: 1.5;
   font-size: 0.92rem;
+}
+
+/* Root header above the per-project groups — the folder that actually
+   contains all of them (their home dir), not a generic "Projects" label.
+   Right-pointing chevron distinguishes it from each group's own
+   down/left-pointing one below. */
+.project-root-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 2px;
+}
+
+.project-root-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 10px 8px;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.95rem;
+  font-weight: 600;
+  text-align: left;
+}
+
+.project-root-toggle:hover,
+.project-root-toggle:focus-visible {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text);
+}
+
+.project-root-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-root-chevron {
+  font-size: 0.8rem;
+  color: var(--muted);
+  transition: transform 150ms ease;
+}
+
+.project-root-toggle[aria-expanded="true"] .project-root-chevron {
+  transform: rotate(90deg);
+}
+
+/* 2026-08-21 UI design round: sessions grouped per project, Claude Code
+   desktop sidebar style (see renderProjectList in app.js) — replaces the
+   global "Recent" list. */
+.project-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-bottom: 6px;
+}
+
+.project-group-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* Deliberately not bold, not uppercase — the human's reference marks the
+   session titles as what matters, project names are just grouping. */
+.project-group-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 400;
+  text-align: left;
+}
+
+.project-group-toggle:hover,
+.project-group-toggle:focus-visible,
+.project-group-toggle.active {
+  color: var(--text);
+}
+
+.project-group-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-group-chevron {
+  flex: none;
+  font-size: 0.8rem;
+  transition: transform 150ms ease;
+}
+
+.project-group-toggle[aria-expanded="false"] .project-group-chevron {
+  transform: rotate(-90deg);
+}
+
+.project-group-add {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 1rem;
+  line-height: 1;
+}
+
+.project-group-add:hover,
+.project-group-add:focus-visible {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+}
+
+.project-group-sessions {
+  padding-left: 4px;
+}
+
+.chat-session-item__dot {
+  margin-right: 6px;
+  font-size: 0.6rem;
+  color: var(--muted);
+  vertical-align: 1px;
 }
 
 .chat-session-list {
@@ -258,9 +396,10 @@ button {
   padding: 12px 14px;
   border-radius: 14px;
   background: transparent;
-  color: var(--muted);
+  color: var(--text);
   text-align: left;
   font-size: 0.95rem;
+  font-weight: 500;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -344,12 +483,13 @@ button {
   gap: 18px;
 }
 
+/* 2026-08-20 UI design round: hidden, not removed — app.js still writes
+   textContent/dataset.state to #chat-status-indicator every status change
+   (renderChatStatus), so the element has to stay in the DOM. This is a
+   visual-only cut, same reasoning as canvas-empty-state's [hidden] rule
+   elsewhere in this file. */
 .chat-status-row {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 16px;
-  padding: 4px 2px;
+  display: none;
 }
 
 .chat-shell {
@@ -593,6 +733,95 @@ button:disabled {
 .chat-entry.system {
   background: #202020;
   color: #d1d1d1;
+}
+
+/* "The agent is thinking" row — shown while state.chatThinking is true. */
+.chat-entry--thinking {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 16px;
+}
+
+.chat-thinking-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--muted);
+  animation: chat-thinking-bounce 1.2s ease-in-out infinite;
+}
+
+.chat-thinking-dot:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.chat-thinking-dot:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+@keyframes chat-thinking-bounce {
+  0%, 60%, 100% {
+    opacity: 0.35;
+    transform: translateY(0);
+  }
+  30% {
+    opacity: 1;
+    transform: translateY(-3px);
+  }
+}
+
+/* 2026-08-21 UI design round: each entry is now a row, agent replies get
+   a small avatar to the left (Kimi-style), the human's own echoed
+   message doesn't. */
+.chat-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  max-width: var(--chat-column);
+  width: 100%;
+  margin: 0 auto;
+}
+
+.chat-row--agent .chat-entry {
+  margin: 0;
+}
+
+.chat-avatar {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  margin-top: 6px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 32% 28%, #6ea8ff, #2f6fed 65%);
+  position: relative;
+  animation: chat-avatar-breathe 2.4s ease-in-out infinite;
+}
+
+.chat-avatar::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 11px;
+  height: 6px;
+  transform: translate(-50%, -50%);
+  background-image:
+    radial-gradient(circle, #fff 45%, transparent 46%),
+    radial-gradient(circle, #fff 45%, transparent 46%);
+  background-size: 5px 5px;
+  background-repeat: no-repeat;
+  background-position: left center, right center;
+}
+
+@keyframes chat-avatar-breathe {
+  0%, 100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(47, 111, 237, 0.35);
+  }
+  50% {
+    transform: scale(1.08);
+    box-shadow: 0 0 0 5px rgba(47, 111, 237, 0);
+  }
 }
 
 .chat-feedback {
@@ -1023,12 +1252,129 @@ button:disabled {
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  padding: 20px;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 20px;
+  overflow: hidden;
+}
+
+/* Top half of the split: everything the canvas view used to be (diagram
+   cards, empty state, suggest banner) — unchanged behavior, just now
+   confined to 50% of the view's height instead of the whole thing. */
+.canvas-diagram-area {
+  position: relative;
+  flex: 1 1 50%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 20px;
   overflow: auto;
+}
+
+/* Small blue folder marker, top-left corner (2026-08-20 UI design round).
+   Purpose/behavior undecided — placeholder to build the rest of the
+   design against. */
+.canvas-folder-marker {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  width: 84px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  padding: 4px;
+  cursor: pointer;
+  z-index: 1;
+}
+
+.canvas-folder-marker:hover,
+.canvas-folder-marker:focus-visible {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.canvas-folder-marker__label {
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: var(--text, #e6e6e6);
+}
+
+/* "← diagramas" — shown instead of the folder marker once it's open. */
+.canvas-folder-back-button {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.85rem;
+  cursor: pointer;
+  z-index: 1;
+  padding: 6px 4px;
+}
+
+.canvas-folder-back-button:hover,
+.canvas-folder-back-button:focus-visible {
+  color: var(--text, #e6e6e6);
+}
+
+.canvas-folder-back-button[hidden] {
+  display: none;
+}
+
+/* Content area is pushed below the back button while the folder is open,
+   so cards don't render underneath it. */
+.canvas-diagram-area--open .canvas-objects {
+  margin-top: 40px;
+}
+
+/* Bottom half of the split (2026-08-20/21 UI design round) — now a second
+   chat, UI-only (see lowerChat* in app.js: local echo, nothing sent
+   anywhere). border-top is the "clear division" between halves. */
+.canvas-lower-panel {
+  flex: 1 1 50%;
+  min-height: 0;
+  background: #000;
+  border-top: 1px solid var(--border-strong);
+  display: flex;
+  flex-direction: column;
+  padding: 16px;
+  gap: 12px;
+}
+
+.lower-chat-log {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.lower-chat-empty {
+  margin: auto;
+  text-align: center;
+  max-width: 320px;
+}
+
+.lower-chat-form {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.lower-chat-form input {
+  flex: 1 1 auto;
+  background: #141414;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 10px 16px;
+  color: var(--text);
 }
 
 /* Visibility is driven from JS (renderCanvasView toggles the hidden
@@ -1056,19 +1402,71 @@ button:disabled {
   display: none;
 }
 
-.canvas-object-card {
-  border: 1px solid var(--border);
-  border-radius: 16px;
-  background: #1b1b1b;
-  padding: 14px 16px;
-  cursor: pointer;
-  transition: border-color 120ms ease, background 120ms ease;
+/* Grid level (folder open, nothing expanded): small file-style thumbnails,
+   wrapped Finder-icon-view style. */
+.canvas-objects--grid {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-content: flex-start;
+  gap: 20px;
 }
 
-.canvas-object-card:hover,
-.canvas-object-card:focus-visible {
-  border-color: var(--border-strong);
-  background: #202020;
+.canvas-diagram-file {
+  width: 120px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  border: none;
+  background: transparent;
+  padding: 4px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.canvas-diagram-file:hover,
+.canvas-diagram-file:focus-visible {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.canvas-diagram-thumb {
+  width: 120px;
+  height: 84px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #141414;
+}
+
+/* JS sets an explicit scale transform on the stage inside (its own size
+   comes from the diagram's layout, not this box) — see
+   renderDiagramThumbnail in app.js. */
+.canvas-diagram-thumb .canvas-diagram-stage {
+  pointer-events: none;
+  flex: none;
+}
+
+.canvas-diagram-file__name {
+  font-size: 0.8rem;
+  color: var(--text, #e6e6e6);
+  text-align: center;
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Expanded level: one diagram, full size, scrollable if it's bigger than
+   the available space. */
+.canvas-objects--expanded {
+  display: block;
+}
+
+.canvas-diagram-expanded__stage {
+  overflow: auto;
 }
 
 .canvas-object-card__header {
@@ -1214,6 +1612,49 @@ button:disabled {
 
 .canvas-suggest-banner span:first-child {
   flex: 1 1 auto;
+}
+
+/* Sesiones: same banner chrome as .canvas-suggest-banner (persistent, not
+   an auto-dismissing chat-feedback line) but amber rather than green — this
+   is a "you should act soon" warning, not a positive suggestion. Shown when
+   the active session's context window crosses closeSessionWarnThreshold
+   (85%, termserver/chat.go). */
+.session-close-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(251, 191, 36, 0.25);
+  background: rgba(251, 191, 36, 0.08);
+  margin-bottom: 10px;
+}
+
+.session-close-banner[hidden] {
+  display: none;
+}
+
+.session-close-banner span:first-child {
+  flex: 1 1 auto;
+}
+
+/* Closed chat sessions: quiet metadata, not a call to action — dimmed
+   label, a small uppercase badge next to the title. Session stays fully
+   clickable (read-only reopen), see openChatSession. */
+.chat-session-item--closed .chat-session-item__dot {
+  opacity: 0.5;
+}
+
+.chat-session-item__badge {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px 6px;
+  margin-left: 6px;
+  flex: 0 0 auto;
 }
 
 /* --- Floating object-editing panel: no existing modal primitive in this

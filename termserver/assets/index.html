@@ -31,17 +31,27 @@
           <span aria-hidden="true">◎</span>
           <span>Planning</span>
         </button>
-        <button
-          id="project-section-toggle"
-          class="sidebar-nav-item"
-          type="button"
-          aria-expanded="false"
-          aria-controls="project-list"
-        >
-          <span aria-hidden="true">⌘</span>
-          <span>Projects</span>
-          <span class="sidebar-nav-chevron" aria-hidden="true">⌄</span>
-        </button>
+        <!-- 2026-08-21 UI design round: root header above the per-project
+             groups, matching the human's reference (Claude Code desktop
+             sidebar) — the folder that actually contains every project
+             (their home dir), not a generic "Projects" label. Name is
+             filled in by loadProjectList once the scan returns (derived
+             from any project's path — see rootFolderNameFromProjectPath in
+             app.js), never hardcoded, so this reads correctly on any
+             machine, not just this one. -->
+        <div class="project-root-header">
+          <button
+            id="project-section-toggle"
+            class="project-root-toggle"
+            type="button"
+            aria-expanded="false"
+            aria-controls="project-list"
+          >
+            <span id="project-root-name" class="project-root-name">Projects</span>
+            <span class="project-root-chevron" aria-hidden="true">›</span>
+          </button>
+          <button id="project-root-add" class="project-group-add" type="button" aria-label="New chat">+</button>
+        </div>
         <div id="project-list" class="chat-session-list" aria-live="polite" hidden>
           <p class="sidebar-placeholder">Loading projects…</p>
         </div>
@@ -58,7 +68,13 @@
         <p class="sidebar-placeholder">Pinned chats will appear here later.</p>
       </section>
 
-      <section class="sidebar-section">
+      <!-- 2026-08-21 UI design round: hidden, not removed — app.js still
+           renders into #chat-session-list on every session refresh, and
+           sessions are now browsed per-project instead (see #project-list's
+           per-project "Sessions" tab, wired in renderProjectList). Same
+           reasoning as .chat-status-row's [hidden] cut elsewhere in this
+           file: the DOM node has to stay, the render just doesn't show. -->
+      <section id="recent-chats-section" class="sidebar-section">
         <button
           id="chat-section-toggle"
           class="sidebar-section-toggle"
@@ -119,14 +135,56 @@
     <main class="workspace">
       <div class="workspace-shell" id="home-view">
         <section id="canvas-view" class="canvas-view" aria-label="Canvas">
-          <div id="canvas-empty-state" class="canvas-empty-state">
-            <p class="muted">Nothing on the Canvas yet. Discuss something with the agent — a diagram it can draft appears here once materialized.</p>
+          <div id="canvas-diagram-area" class="canvas-diagram-area">
+            <!-- Small blue folder, top-left corner of the diagram area —
+                 2026-08-20 UI design round. Purpose not decided yet, just
+                 the marker the human asked for; diagram cards are no
+                 longer rendered here (see renderCanvasView in app.js). -->
+            <button id="canvas-folder-marker" class="canvas-folder-marker" type="button" aria-label="Diagramas">
+              <svg viewBox="0 0 64 56" width="52" height="46" aria-hidden="true">
+                <defs>
+                  <linearGradient id="canvas-folder-back" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0" stop-color="#bfe0ff"/>
+                    <stop offset="1" stop-color="#8ec4f5"/>
+                  </linearGradient>
+                  <linearGradient id="canvas-folder-front" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0" stop-color="#6cb2f4"/>
+                    <stop offset="1" stop-color="#3f8ee6"/>
+                  </linearGradient>
+                </defs>
+                <path d="M2 8C2 5.79 3.79 4 6 4h14l6 6h30c2.21 0 4 1.79 4 4v6H2V8Z" fill="url(#canvas-folder-back)"/>
+                <path d="M2 16c0-1.1.9-2 2-2h56c1.1 0 2 .9 2 2v30c0 3.31-2.69 6-6 6H8c-3.31 0-6-2.69-6-6V16Z" fill="url(#canvas-folder-front)"/>
+              </svg>
+              <span class="canvas-folder-marker__label">diagramas</span>
+            </button>
+            <button id="canvas-folder-back-button" class="canvas-folder-back-button" type="button" hidden>
+              ← diagramas
+            </button>
+            <div id="canvas-empty-state" class="canvas-empty-state" hidden>
+              <p class="muted">Nothing on the Canvas yet. Discuss something with the agent — a diagram it can draft appears here once materialized.</p>
+            </div>
+            <div id="canvas-objects" class="canvas-objects" aria-live="polite"></div>
+            <div id="canvas-suggest-banner" class="canvas-suggest-banner" hidden>
+              <span id="canvas-suggest-text"></span>
+              <button id="canvas-suggest-button" class="ghost-button" type="button">Materialize</button>
+              <button id="canvas-suggest-dismiss" class="ghost-button" type="button" aria-label="Dismiss">✕</button>
+            </div>
           </div>
-          <div id="canvas-objects" class="canvas-objects" aria-live="polite"></div>
-          <div id="canvas-suggest-banner" class="canvas-suggest-banner" hidden>
-            <span id="canvas-suggest-text"></span>
-            <button id="canvas-suggest-button" class="ghost-button" type="button">Materialize</button>
-            <button id="canvas-suggest-dismiss" class="ghost-button" type="button" aria-label="Dismiss">✕</button>
+          <!-- Lower half of the split, per the 2026-08-20/21 UI design round
+               (planning_design_canvas_next_round5_prompt.md and the live
+               conversation after it): a second chat, UI-only for now — not
+               wired to /api/chat, no session, no agent reply. Purpose
+               (multi-AI? something else?) still undecided; this is just the
+               shape of it to design against. See lowerChat* in app.js. -->
+          <div id="canvas-lower-panel" class="canvas-lower-panel" aria-label="Canvas lower panel">
+            <div id="lower-chat-log" class="lower-chat-log" aria-live="polite">
+              <p class="lower-chat-empty muted">Nothing here yet — this is a second chat, still just a mockup.</p>
+            </div>
+            <form id="lower-chat-form" class="lower-chat-form">
+              <label class="sr-only" for="lower-chat-input">Message</label>
+              <input id="lower-chat-input" type="text" placeholder="Say something" autocomplete="off">
+              <button id="lower-chat-send-button" class="chat-send-button" type="submit" aria-label="Send">↑</button>
+            </form>
           </div>
         </section>
 
@@ -138,6 +196,12 @@
           <div class="chat-shell">
             <div class="chat-empty-state">
               <p class="chat-wordmark">exo</p>
+            </div>
+
+            <div id="session-close-banner" class="session-close-banner" hidden>
+              <span id="session-close-text"></span>
+              <button id="session-close-button" class="ghost-button" type="button">Close &amp; summarize</button>
+              <button id="session-close-dismiss" class="ghost-button" type="button" aria-label="Dismiss">✕</button>
             </div>
 
             <div id="chat-log" class="chat-log" aria-live="polite"></div>

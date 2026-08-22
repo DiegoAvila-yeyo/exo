@@ -38,9 +38,9 @@ func TestParseMaterializeSlashCommand(t *testing.T) {
 func TestMaterializeSlashCommandMaterializesUnambiguousDraft(t *testing.T) {
 	store := newFakeStore()
 	cs := newTestCanvasStore(t)
-	runner := func(_ context.Context, _ string, _ []api.Message, _ string, _ string, _ string, _ string) ([]api.Message, *NavigateAction, *CanvasSuggestion, error) {
+	runner := func(_ context.Context, _ string, _ []api.Message, _ string, _ string, _ string, _ string) ([]api.Message, *NavigateAction, *CanvasSuggestion, *TurnUsage, error) {
 		t.Fatalf("runner should never be called for a /materialize slash command")
-		return nil, nil, nil, nil
+		return nil, nil, nil, nil, nil
 	}
 	_, server, httpServer := newTestServer(t, store, WithAgentRunner(runner), WithCanvasStore(cs))
 	client, csrf := bootstrapClient(t, httpServer, server)

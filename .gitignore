@@ -7,3 +7,8 @@
 
 # OS
 .DS_Store
+
+# nucleo-base coordinator task-tracking state, written into whatever
+# project is active when the agent runs a turn against this repo itself
+# (e.g. live-testing exo serve with this project as the active project)
+.harness/
