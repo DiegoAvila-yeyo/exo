@@ -15,11 +15,13 @@ import (
 	"github.com/DiegoAvila-yeyo/exo/canvasstore"
 	"github.com/DiegoAvila-yeyo/exo/m8adapter"
 	"github.com/DiegoAvila-yeyo/exo/planningstore"
+	"github.com/DiegoAvila-yeyo/exo/sessionrecall"
 	"github.com/DiegoAvila-yeyo/exo/sessions"
 	"github.com/DiegoAvila-yeyo/exo/yeyotelemetry"
 	"github.com/yeyoos/nucleo-base/layer2-runtime-rails/agent"
 	"github.com/yeyoos/nucleo-base/layer2-runtime-rails/instructions"
 	"github.com/yeyoos/nucleo-base/layer2-runtime-rails/mcp"
+	nbprovider "github.com/yeyoos/nucleo-base/layer2-runtime-rails/provider"
 	"github.com/yeyoos/nucleo-base/layer2-runtime-rails/runtime"
 	nbmemorytool "github.com/yeyoos/nucleo-base/layer2-runtime-rails/tool"
 	nbtool "github.com/yeyoos/nucleo-base/layer2-runtime-rails/tool"
@@ -49,6 +51,23 @@ type Host struct {
 
 	canvasStore *canvasstore.Store // nil when Canvas isn't configured (see New), same fixed-registry/gated-at-Execute pattern as planningStore
 	canvasCell  *canvasCell        // shared with the canvas_* tools; see canvas_context.go
+
+	sessionRecallStore *sessionrecall.Store // nil when session recall isn't configured; scoped via canvasCell.projectID, see session_recall_tool.go
+
+	// provider/modelID/contextWindowTokens back both the per-turn context
+	// meter (lastTurnResult below, threaded up via LastTurnUsage) and
+	// SummarizeSession's own separate, tool-less completion call — see
+	// context_window.go for how contextWindowTokens is resolved.
+	provider            nbprovider.Provider
+	modelID             string
+	contextWindowTokens int
+
+	// lastTurnResult holds the most recently completed turn's outcome
+	// (TokenDelta in particular) so LastTurnUsage (read by backend.go's
+	// runner right after Run returns, same shape as TakeNavigateAction) can
+	// report it upward. Guarded by stdoutMu — only ever written inside Run,
+	// which already holds that lock for its whole duration.
+	lastTurnResult runtime.TurnResult
 
 	// gateEnabled and gateOnlySnapshot exist only when EXO_YEYO_GATE is set
 	// (see yeyoGateEnabled). gateOnlySnapshot is an immutable copy holding
@@ -101,7 +120,7 @@ func ValidateEnv() error {
 // "planning is not configured" rather than the tools being conditionally
 // absent (see buildToolRegistry and build_prompt_PLANNING_ROUND2.md's "Tool
 // availability" decision: fixed registry, gated at Execute).
-func New(ctx context.Context, manager *sessions.Manager, planningStore *planningstore.Store, canvasStore *canvasstore.Store) (*Host, error) {
+func New(ctx context.Context, manager *sessions.Manager, planningStore *planningstore.Store, canvasStore *canvasstore.Store, sessionRecallStore *sessionrecall.Store) (*Host, error) {
 	if manager == nil {
 		return nil, fmt.Errorf("agenthost: sessions manager is required")
 	}
@@ -130,7 +149,7 @@ func New(ctx context.Context, manager *sessions.Manager, planningStore *planning
 	navigateCell := newNavigateCell()
 	canvasCell := newCanvasCell()
 	gateEnabled := yeyoGateEnabled()
-	registry := buildToolRegistry(adapter, planningStore, planningCtx, navigateCell, canvasStore, canvasCell, !gateEnabled)
+	registry := buildToolRegistry(adapter, planningStore, planningCtx, navigateCell, canvasStore, canvasCell, sessionRecallStore, !gateEnabled)
 	var mcpClients []*mcp.Client
 	// exp1g Experimento L: MCP servers (GitHub, Jira) register their own
 	// tools directly onto registry, bypassing buildToolRegistry's judge-only
@@ -158,7 +177,14 @@ func New(ctx context.Context, manager *sessions.Manager, planningStore *planning
 		canvasStore:      canvasStore,
 		canvasCell:       canvasCell,
 		gateEnabled:      gateEnabled,
+
+		sessionRecallStore: sessionRecallStore,
+		provider:           provider,
+		modelID:            provider.Model(),
 	}
+	// Best-effort, once at construction (not per-turn) — see
+	// context_window.go's doc comment. Never fails startup.
+	h.contextWindowTokens = resolveContextWindowTokens(ctx, h.modelID)
 
 	var bootstrapReg *nbtool.Registry
 	if gateEnabled {
@@ -349,7 +375,11 @@ func (h *Host) Run(ctx context.Context, input string, output io.Writer) error {
 	h.stdoutMu.Lock()
 	defer h.stdoutMu.Unlock()
 
-	restore, err := redirectStdout(output)
+	// finalOnlyChatWriter (chat_output_filter.go) strips the agent's
+	// internal trace — phase markers, tool-call lines, raw JSON for any
+	// tool nucleo-base doesn't have a friendly summary for — down to just
+	// the human-facing answer. CANVAS_STATUS.md bugs #3/#4.
+	restore, err := redirectStdout(newFinalOnlyChatWriter(output))
 	if err != nil {
 		return err
 	}
@@ -397,7 +427,9 @@ func (h *Host) Run(ctx context.Context, input string, output io.Writer) error {
 		h.rememberRawInputForSession(sessionID, input)
 	}
 
-	_, err = h.coordinator.Run(ctx, coordinatorInput)
+	var turnResult runtime.TurnResult
+	turnResult, err = h.coordinator.Run(ctx, coordinatorInput)
+	h.lastTurnResult = turnResult
 
 	// Technical outcome only — never a judgment about whether the gate's
 	// decision was right, see recordGateTurnResult's doc comment.
@@ -453,7 +485,7 @@ func yeyoGateEnabled() bool {
 	return strings.TrimSpace(os.Getenv("EXO_YEYO_GATE")) != ""
 }
 
-func buildToolRegistry(adapter *m8adapter.Adapter, planningStore *planningstore.Store, planningCtx *planningContext, navigateCell *navigateCell, canvasStore *canvasstore.Store, canvasCell *canvasCell, includeAtomTool bool) *nbtool.Registry {
+func buildToolRegistry(adapter *m8adapter.Adapter, planningStore *planningstore.Store, planningCtx *planningContext, navigateCell *navigateCell, canvasStore *canvasstore.Store, canvasCell *canvasCell, sessionRecallStore *sessionrecall.Store, includeAtomTool bool) *nbtool.Registry {
 	// exp1g Experimento L: judgment-only mode. When set, the model gets no
 	// tool that lets it act on the task or consult the atom catalog — not
 	// even atom itself. "tasks_file"/"progress" are kept registered only
@@ -510,6 +542,14 @@ func buildToolRegistry(adapter *m8adapter.Adapter, planningStore *planningstore.
 	registry.Register(canvasEditObjectTool{canvasBase})
 	registry.Register(canvasActivateObjectTool{canvasBase})
 	registry.Register(canvasDeactivateObjectTool{canvasBase})
+
+	// session_recall: same fixed-registry, gated-at-Execute pattern as
+	// Planning/Canvas above — sessionRecallStore may be nil, in which case
+	// every call fails clearly rather than the tool being conditionally
+	// absent. Scoped via canvasCell.projectID (refreshed every turn by
+	// Host.BeginTurn), never from the model's own tool input — see
+	// session_recall_tool.go.
+	registry.Register(sessionRecallTool{store: sessionRecallStore, cell: canvasCell})
 	return registry
 }
 

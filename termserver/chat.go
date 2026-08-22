@@ -54,7 +54,42 @@ import (
 // duration of this turn — see agenthost's canvasCell.checkScope for why:
 // with more than one Canvas object anchored at once, the model can't
 // otherwise be trusted to infer which one a mini-chat message is about.
-type AgentRunner func(ctx context.Context, input string, history []api.Message, projectPath string, planningID string, boardID string, canvasObjectID string) ([]api.Message, *NavigateAction, *CanvasSuggestion, error)
+//
+// The returned *TurnUsage (Sesiones) is this turn's token-window reading —
+// see TurnUsage's doc comment. Unlike NavigateAction/CanvasSuggestion it is
+// expected to be non-nil on every successful turn (a context window size is
+// always resolvable, worst case the conservative generic default), nil only
+// when the concrete runner has no usage to report at all (e.g. Run itself
+// never got called).
+type AgentRunner func(ctx context.Context, input string, history []api.Message, projectPath string, planningID string, boardID string, canvasObjectID string) ([]api.Message, *NavigateAction, *CanvasSuggestion, *TurnUsage, error)
+
+// TurnUsage mirrors agenthost.TurnUsage's shape (deliberately not reused
+// directly — termserver stays decoupled from agenthost via the AgentRunner
+// contract, same as NavigateAction/CanvasSuggestion). LastTurnTokens is
+// this turn's own token delta, never a cumulative session total — see
+// build_prompt_SESSION_RECALL.md's "last-turn, not cumulative" decision.
+type TurnUsage struct {
+	LastTurnTokens      int
+	ContextWindowTokens int
+	ModelID             string
+}
+
+// ContextPct returns LastTurnTokens/ContextWindowTokens as a 0-100
+// percentage, or 0 if ContextWindowTokens is unset (avoids a divide by
+// zero — a session with no resolved window just never triggers the
+// close-recommendation banner).
+func (u TurnUsage) ContextPct() float64 {
+	if u.ContextWindowTokens <= 0 {
+		return 0
+	}
+	return float64(u.LastTurnTokens) / float64(u.ContextWindowTokens) * 100
+}
+
+// closeSessionWarnThreshold is the fixed 85% v1 threshold (decision #2 of
+// planning_design_session_recall_round1_response.md) at which the frontend
+// shows a "recommend closing this session" banner. Not yet configurable —
+// see that decision's rationale for why 85 over 80/90.
+const closeSessionWarnThreshold = 85.0
 
 // CanvasSuggestion is the contextual "materialize this?" signal — the
 // button affordance from the Canvas build spec is never the only way to
@@ -188,11 +223,27 @@ type chatCanvasSuggestEvent struct {
 	Name     string `json:"name"`
 }
 
+// chatUsageEvent is the wire shape of a TurnUsage, delivered over SSE the
+// same way navigate/canvas_suggest are — fanned out to every connected tab,
+// no per-client routing (a tab only cares about this if it's the one
+// showing that session, which app.js checks via session_id before acting
+// on it, the same client-side filtering pattern navigate already uses via
+// client_id/turn_id).
+type chatUsageEvent struct {
+	Type                string  `json:"type"`
+	SessionID           string  `json:"session_id,omitempty"`
+	LastTurnTokens      int     `json:"last_turn_tokens"`
+	ContextWindowTokens int     `json:"context_window_tokens"`
+	ModelID             string  `json:"model_id,omitempty"`
+	ContextPct          float64 `json:"context_pct"`
+}
+
 type chatSubscription struct {
 	output        chan string
 	done          chan struct{}
 	navigate      chan chatNavigateEvent
 	canvasSuggest chan chatCanvasSuggestEvent
+	usage         chan chatUsageEvent
 }
 
 type chatBroadcaster struct {
@@ -267,17 +318,18 @@ func (b *chatBroadcaster) Replay(output chan string) {
 	}
 }
 
-func (b *chatBroadcaster) Subscribe() (chan string, chan struct{}, chan chatNavigateEvent, chan chatCanvasSuggestEvent) {
+func (b *chatBroadcaster) Subscribe() (chan string, chan struct{}, chan chatNavigateEvent, chan chatCanvasSuggestEvent, chan chatUsageEvent) {
 	sub := &chatSubscription{
 		output:        make(chan string, 1024),
 		done:          make(chan struct{}, 1),
 		navigate:      make(chan chatNavigateEvent, 4),
 		canvasSuggest: make(chan chatCanvasSuggestEvent, 4),
+		usage:         make(chan chatUsageEvent, 4),
 	}
 	b.mu.Lock()
 	b.subs[sub.output] = sub
 	b.mu.Unlock()
-	return sub.output, sub.done, sub.navigate, sub.canvasSuggest
+	return sub.output, sub.done, sub.navigate, sub.canvasSuggest, sub.usage
 }
 
 func (b *chatBroadcaster) Unsubscribe(output chan string) {
@@ -319,6 +371,18 @@ func (b *chatBroadcaster) NotifyCanvasSuggest(event chatCanvasSuggestEvent) {
 	for _, sub := range b.subs {
 		select {
 		case sub.canvasSuggest <- event:
+		default:
+		}
+	}
+	b.mu.RUnlock()
+}
+
+// NotifyUsage mirrors NotifyNavigate exactly, for chatUsageEvent.
+func (b *chatBroadcaster) NotifyUsage(event chatUsageEvent) {
+	b.mu.RLock()
+	for _, sub := range b.subs {
+		select {
+		case sub.usage <- event:
 		default:
 		}
 	}
@@ -439,6 +503,15 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		sessionLoaded = true
 	}
 
+	// Closed is terminal (piece 9, build_prompt_SESSION_RECALL.md) — a
+	// closed session stays readable via GET but never accepts a new
+	// message. The human's path to continue is opening a new session, not
+	// this one.
+	if sessionLoaded && session.Status == chatstore.StatusClosed {
+		http.Error(w, "this session is closed; start a new session to continue", http.StatusConflict)
+		return
+	}
+
 	// /materialize <draft-name> is the unambiguous slash-command fallback
 	// channel (Canvas build spec) — always resolves to exactly one draft or
 	// a clear error, no model inference involved, so it's handled here,
@@ -496,7 +569,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		// constructs one) for a value that only the yeyo gate's telemetry
 		// (agenthost/gate_telemetry.go, EXO_YEYO_GATE) currently reads.
 		runCtx := agenthost.ContextWithSessionID(context.Background(), sess.ID)
-		updated, navAction, canvasSuggestion, err := s.runner(runCtx, message, sess.Messages, sess.ProjectPath, planningID, boardID, canvasObjectID)
+		updated, navAction, canvasSuggestion, turnUsage, err := s.runner(runCtx, message, sess.Messages, sess.ProjectPath, planningID, boardID, canvasObjectID)
 		if err != nil {
 			_, _ = io.WriteString(s.chatBroadcaster, "error: "+err.Error()+"\n")
 		}
@@ -522,6 +595,16 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 				Name:     canvasSuggestion.Name,
 			})
 		}
+		if turnUsage != nil {
+			s.chatBroadcaster.NotifyUsage(chatUsageEvent{
+				Type:                "usage",
+				SessionID:           sess.ID,
+				LastTurnTokens:      turnUsage.LastTurnTokens,
+				ContextWindowTokens: turnUsage.ContextWindowTokens,
+				ModelID:             turnUsage.ModelID,
+				ContextPct:          turnUsage.ContextPct(),
+			})
+		}
 		if persist {
 			sess.Messages = updated
 			for _, line := range s.chatBroadcaster.Snapshot() {
@@ -529,6 +612,16 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			}
 			if sess.Title == chatstore.DefaultTitle {
 				sess.Title = deriveChatTitle(message)
+			}
+			// Piece 4 (build_prompt_SESSION_RECALL.md): persisted per-session
+			// usage, written on every Save alongside Messages/Entries — the
+			// sidebar's lightweight summary doesn't need the percentage, only
+			// the active session's own view does, so this is computed
+			// client-side (TurnUsage.ContextPct) from these raw numbers.
+			if turnUsage != nil {
+				sess.LastTurnTokens = turnUsage.LastTurnTokens
+				sess.ContextWindowTokens = turnUsage.ContextWindowTokens
+				sess.ModelID = turnUsage.ModelID
 			}
 			if saveErr := s.chatStore.Save(sess); saveErr != nil {
 				fmt.Printf("termserver: failed to save chat session %q: %v\n", sess.ID, saveErr)
@@ -559,7 +652,7 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
 
-	output, done, navigate, canvasSuggest := s.chatBroadcaster.Subscribe()
+	output, done, navigate, canvasSuggest, usage := s.chatBroadcaster.Subscribe()
 	defer s.chatBroadcaster.Unsubscribe(output)
 	s.chatBroadcaster.Replay(output)
 
@@ -600,6 +693,8 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 		case event := <-navigate:
 			s.writeSSE(w, event)
 		case event := <-canvasSuggest:
+			s.writeSSE(w, event)
+		case event := <-usage:
 			s.writeSSE(w, event)
 		case <-approvalTicker.C:
 			if seq, prompt, detail, sessionID, active := s.approval.snapshot(); active && seq != lastApprovalSeq {

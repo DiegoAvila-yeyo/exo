@@ -47,7 +47,24 @@ type ChatSession struct {
 	// see termserver/chat.go's resolvePlanningContext.
 	PlanningID string `json:"planning_id,omitempty"`
 	BoardID    string `json:"board_id,omitempty"`
+
+	// LastTurnTokens/ContextWindowTokens/ModelID are the Sesiones token
+	// meter's raw inputs — set on every Save from the most recent turn's
+	// TurnUsage (termserver/chat.go). LastTurnTokens is this turn's own
+	// token delta, never a cumulative session total. ContextPct (shown to
+	// the human) is computed from these rather than persisted separately.
+	LastTurnTokens      int    `json:"last_turn_tokens,omitempty"`
+	ContextWindowTokens int    `json:"context_window_tokens,omitempty"`
+	ModelID             string `json:"model_id,omitempty"`
+
+	// Status is "" (open) or StatusClosed. Closed is terminal: no
+	// "reopen and continue" on the same ID — see chat.go's handleChat and
+	// chatsessions.go's handleCloseChatSession.
+	Status string `json:"status,omitempty"`
 }
+
+// StatusClosed is the only non-empty value ChatSession.Status holds.
+const StatusClosed = "closed"
 
 // ChatSessionSummary is the lightweight view used for sidebar listings —
 // no transcript, so listing many sessions stays cheap. ProjectPath is
@@ -59,6 +76,9 @@ type ChatSessionSummary struct {
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 	ProjectPath string    `json:"project_path,omitempty"`
+	// Status lets the sidebar sort closed sessions below open ones and show
+	// a "Closed" badge — see the 2026-08-21 UI round's buildSessionsListElement.
+	Status string `json:"status,omitempty"`
 }
 
 const DefaultTitle = "New chat"
@@ -145,6 +165,7 @@ func (s *Store) List() ([]ChatSessionSummary, error) {
 			CreatedAt:   session.CreatedAt,
 			UpdatedAt:   session.UpdatedAt,
 			ProjectPath: session.ProjectPath,
+			Status:      session.Status,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool {

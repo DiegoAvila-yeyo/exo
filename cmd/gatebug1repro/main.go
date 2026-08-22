@@ -60,7 +60,7 @@ func main() {
 	}
 
 	manager := sessions.New()
-	host, err := agenthost.New(context.Background(), manager, nil, nil)
+	host, err := agenthost.New(context.Background(), manager, nil, nil, nil)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "agenthost.New:", err)
 		os.Exit(1)

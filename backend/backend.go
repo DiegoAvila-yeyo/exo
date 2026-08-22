@@ -21,6 +21,7 @@ import (
 	"github.com/DiegoAvila-yeyo/exo/launchdsocket"
 	"github.com/DiegoAvila-yeyo/exo/lifecycle"
 	"github.com/DiegoAvila-yeyo/exo/planningstore"
+	"github.com/DiegoAvila-yeyo/exo/sessionrecall"
 	"github.com/DiegoAvila-yeyo/exo/sessions"
 	"github.com/DiegoAvila-yeyo/exo/sessionstore"
 	"github.com/DiegoAvila-yeyo/exo/singleton"
@@ -35,17 +36,18 @@ var newAgentHost = agenthost.New
 var validateAgentHostEnv = agenthost.ValidateEnv
 
 type Config struct {
-	LockPath         string
-	SessionStoreDir  string
-	ChatStoreDir     string
-	PlanningStoreDir string
-	CanvasStoreDir   string
-	Port             int
-	SocketName       string
-	IdleTimeout      time.Duration
-	GracePeriod      time.Duration
-	MaxSessions      int
-	InstanceID       string
+	LockPath              string
+	SessionStoreDir       string
+	ChatStoreDir          string
+	PlanningStoreDir      string
+	CanvasStoreDir        string
+	SessionRecallStoreDir string
+	Port                  int
+	SocketName            string
+	IdleTimeout           time.Duration
+	GracePeriod           time.Duration
+	MaxSessions           int
+	InstanceID            string
 }
 
 func DefaultConfig() Config {
@@ -54,17 +56,19 @@ func DefaultConfig() Config {
 	chatStoreDir, _ := appconfig.ChatStoreDir()
 	planningStoreDir, _ := appconfig.PlanningStoreDir()
 	canvasStoreDir, _ := appconfig.CanvasStoreDir()
+	sessionRecallStoreDir, _ := appconfig.SessionRecallStoreDir()
 	return Config{
-		LockPath:         lockPath,
-		SessionStoreDir:  sessionStoreDir,
-		ChatStoreDir:     chatStoreDir,
-		PlanningStoreDir: planningStoreDir,
-		CanvasStoreDir:   canvasStoreDir,
-		Port:             appconfig.DefaultPort,
-		SocketName:       appconfig.SocketName,
-		IdleTimeout:      appconfig.DefaultIdleTimeout,
-		GracePeriod:      appconfig.DefaultGracePeriod,
-		MaxSessions:      10,
+		LockPath:              lockPath,
+		SessionStoreDir:       sessionStoreDir,
+		ChatStoreDir:          chatStoreDir,
+		PlanningStoreDir:      planningStoreDir,
+		CanvasStoreDir:        canvasStoreDir,
+		SessionRecallStoreDir: sessionRecallStoreDir,
+		Port:                  appconfig.DefaultPort,
+		SocketName:            appconfig.SocketName,
+		IdleTimeout:           appconfig.DefaultIdleTimeout,
+		GracePeriod:           appconfig.DefaultGracePeriod,
+		MaxSessions:           10,
 	}
 }
 
@@ -140,7 +144,21 @@ func Run(ctx context.Context, config Config) error {
 		}
 	}
 
-	host, err := newAgentHost(context.Background(), manager, planningStore, canvasStore)
+	// Session recall ("Sesiones") follows the same optional-store,
+	// built-before-newAgentHost pattern as Planning/Canvas above — one
+	// *sessionrecall.Store shared between the agent's session_recall tool
+	// and termserver's close-session HTTP endpoint.
+	var sessionRecallStore *sessionrecall.Store
+	if config.SessionRecallStoreDir != "" {
+		var srErr error
+		sessionRecallStore, srErr = sessionrecall.New(config.SessionRecallStoreDir)
+		if srErr != nil {
+			_ = lease.Release()
+			return srErr
+		}
+	}
+
+	host, err := newAgentHost(context.Background(), manager, planningStore, canvasStore, sessionRecallStore)
 	if err != nil {
 		_ = lease.Release()
 		return err
@@ -159,6 +177,13 @@ func Run(ctx context.Context, config Config) error {
 	var canvasStoreOpt termserver.Option
 	if canvasStore != nil {
 		canvasStoreOpt = termserver.WithCanvasStore(canvasStore)
+	}
+	var sessionRecallOpts []termserver.Option
+	if sessionRecallStore != nil {
+		sessionRecallOpts = append(sessionRecallOpts,
+			termserver.WithSessionRecallStore(sessionRecallStore),
+			termserver.WithSessionSummarizer(host.SummarizeSession),
+		)
 	}
 
 	shutdownCh := make(chan error, 1)
@@ -199,9 +224,9 @@ func Run(ctx context.Context, config Config) error {
 	})
 
 	var server *termserver.Server
-	runner := func(ctx context.Context, input string, history []api.Message, projectPath string, planningID string, boardID string, canvasObjectID string) ([]api.Message, *termserver.NavigateAction, *termserver.CanvasSuggestion, error) {
+	runner := func(ctx context.Context, input string, history []api.Message, projectPath string, planningID string, boardID string, canvasObjectID string) ([]api.Message, *termserver.NavigateAction, *termserver.CanvasSuggestion, *termserver.TurnUsage, error) {
 		if server == nil {
-			return nil, nil, nil, fmt.Errorf("termserver agent runner invoked before server initialization")
+			return nil, nil, nil, nil, fmt.Errorf("termserver agent runner invoked before server initialization")
 		}
 		// Swap in this session's history and move the agent into whatever
 		// project it picked (rereading that project's own rules) before the
@@ -216,7 +241,7 @@ func Run(ctx context.Context, config Config) error {
 		// before making this mutable Host state instead of threading it
 		// per-call).
 		if err := host.SetRootPath(projectPath); err != nil {
-			return nil, nil, nil, err
+			return nil, nil, nil, nil, err
 		}
 		host.SetMessages(history)
 		host.SetPlanningContext(planningID, boardID)
@@ -281,7 +306,19 @@ func Run(ctx context.Context, config Config) error {
 			}
 		}
 
-		return host.Messages(), nav, canvasSuggestion, err
+		// Piece 3 (build_prompt_SESSION_RECALL.md): this turn's token-window
+		// reading, read back the same post-Run way as TakeNavigateAction —
+		// unconditional (not gated on err) since Host always resolves a
+		// context window size and TokenDelta is meaningful even on a turn
+		// that errored partway through.
+		usage := host.LastTurnUsage()
+		turnUsage := &termserver.TurnUsage{
+			LastTurnTokens:      usage.LastTurnTokens,
+			ContextWindowTokens: usage.ContextWindowTokens,
+			ModelID:             usage.ModelID,
+		}
+
+		return host.Messages(), nav, canvasSuggestion, turnUsage, err
 	}
 
 	termserverOpts := []termserver.Option{
@@ -295,6 +332,9 @@ func Run(ctx context.Context, config Config) error {
 	}
 	if canvasStoreOpt != nil {
 		termserverOpts = append(termserverOpts, canvasStoreOpt)
+	}
+	if len(sessionRecallOpts) > 0 {
+		termserverOpts = append(termserverOpts, sessionRecallOpts...)
 	}
 	if home, homeErr := os.UserHomeDir(); homeErr == nil {
 		termserverOpts = append(termserverOpts, termserver.WithProjectRoot(home))

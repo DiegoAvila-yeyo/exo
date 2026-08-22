@@ -23,6 +23,12 @@ duplicarlo.
 9. `canvas_activation_gap_findings.md` — hallazgo del retest 2026-08-20: el anclaje nunca se activó
    para ningún objeto (falta el disparador, no el mecanismo), con 3 opciones de arreglo y
    recomendación.
+10. `planning_design_canvas_next_round5_prompt.md` / `_response.md` — Round 5 (2026-08-20): si el
+    diagrama ya es "funcional" para seguir construyendo (sí, con reservas — ver bugs abajo), y la
+    idea de "atom_group" (átomos de `yeyo` agrupados como ancla) — **dirección decidida, no
+    construida**: no como tipo de objeto standalone, sí como propiedad adjunta a cualquier objeto
+    materializado, resuelta a snapshot (no puntero vivo) dentro de la historia del objeto, con
+    refresh explícito. Ver sección "Siguiente pieza" abajo.
 
 ## Construido
 
@@ -77,13 +83,24 @@ Encontró los 6 hallazgos de `canvas_live_qa_findings.md`. El build session repo
 
 ## Bugs abiertos, sin arreglar
 
-- [ ] **#3** — JSON crudo de la tool call se filtra al chat al crear un draft. Causa raíz
-      identificada: `agenthost/stdout.go`'s `redirectStdout`, captura trace del `agent.Agent`
-      vendorizado de `nucleo-base`. **Sistémico — afecta a toda la app, no solo Canvas.** Necesita
-      decisión de enfoque (filtrar patrones conocidos en el broadcaster vs. hacerlo específico a
-      canvas tools) antes de poder pedirlo como fix.
-- [ ] **#4** — marcador interno `=== FINAL ===` visible en respuestas de chat normales. Misma causa
-      raíz que #3.
+Ninguno — #3 y #4 (abajo) se arreglaron en la sesión de UI del 2026-08-20.
+
+## Bugs arreglados (2026-08-20, sesión de diseño UI)
+
+- [x] **#3** — JSON crudo de la tool call se filtraba al chat. Causa raíz: `agenthost/stdout.go`'s
+      `redirectStdout` reenviaba tal cual el trace interno del `agent.Agent` vendorizado de
+      `nucleo-base` — `friendlyToolName` (en `nucleo-base`) solo tiene resúmenes legibles para tools
+      genéricas; cualquier tool propia de `exo` (`canvas_*`, `atom_*`, `planning_*`, `scale_*`) caía
+      al `default` y mostraba el JSON crudo. **Sistémico — afectaba a toda la app, no solo Canvas.**
+      Arreglado del lado de `exo`, no tocando `nucleo-base` (compartido con `avengers` y el resto del
+      ecosistema): `agenthost/chat_output_filter.go`'s `finalOnlyChatWriter` solo reenvía al chat lo
+      que aparece después de las marcas que el coordinador ya usa para señalar dónde empieza lo que
+      es para el humano (`=== FINAL ===` / `=== BLOCKED BY GATE ===`), descartando la marca misma y
+      todo el trace previo (fases, tool calls, JSON). Enchufado en `agenthost/host.go`'s `Host.Run`.
+      4 tests nuevos (`agenthost/chat_output_filter_test.go`), verificado en vivo contra `exo serve`
+      real — turno nuevo sin ningún rastro de trace, solo la respuesta.
+- [x] **#4** — marcador interno `=== FINAL ===` visible en respuestas de chat normales. Misma causa
+      raíz y mismo fix que #3 — el marcador ahora se descarta en vez de reenviarse.
 
 ## Bugs reportados como arreglados, pendientes de reverificación
 
@@ -135,8 +152,24 @@ De `build_prompt_CANVAS_HOME_V1.md`:
   como v1.
 - Meta-DSL universal de payload entre tipos de objeto.
 
-## Siguiente pieza — sin decidir todavía
+De la sesión del 2026-08-20 (Round 5, ver arriba) — backlog nombrado, ninguno diseñado a detalle:
+- **Imágenes** — v1 = adjuntar imagen existente al objeto; v2 = generar con imágenes de referencia
+  (diferida).
+- **Video** — solo v2 (generación), sin fase v1 de adjuntar pedida.
+- **Música** — v1 = adjuntar como referencia; v2 = generar con IA a partir de la referencia
+  (diferida).
+- **`atom_group` (átomos de `yeyo` como ancla)** — dirección ya decidida entre el usuario y Codex
+  (propiedad adjunta al objeto, snapshot con refresh explícito, no tipo standalone — ver Round 5
+  arriba), pero **explícitamente no se construye todavía**. El usuario quiere trabajar primero en
+  diseño UI (ver abajo) antes de tocar esto.
+- **Idea separada, mucho más a futuro**: partir la columna central de Canvas en dos — mitad
+  superior para objetos visuales (diagramas y los tipos futuros de arriba), mitad inferior un chat
+  multi-IA (Claude + Codex conversando entre sí y con el humano), aprovechando que Codex es fuerte
+  planeando y débil construyendo, y Claude al revés. Solo nombrada, cero diseño.
 
-Candidatos discutidos pero sin elegir uno: Planning-como-objeto-de-Canvas, un segundo tipo de
-objeto real (imagen/texto), o cerrar #3/#4 primero por ser sistémicos. Decidir antes de generar el
-próximo build prompt.
+## Siguiente pieza — en curso
+
+**Decidido (2026-08-20):** no se construye nada de Canvas ahora mismo. El usuario quiere trabajar
+primero en **diseño UI** de Canvas/diagrama — todavía sin explicar en detalle, él lo va a guiar en
+una sesión aparte. Los bugs #3/#4 (leak sistémico) quedan explícitamente sin tocar por ahora — no
+son parte de este trabajo de diseño.

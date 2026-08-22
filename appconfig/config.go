@@ -71,6 +71,17 @@ func CanvasStoreDir() (string, error) {
 	return filepath.Join(dir, "canvases"), nil
 }
 
+// SessionRecallStoreDir is where sessionrecall.Store persists one JSON file
+// per project (session summaries + recall metadata — the "Sesiones" system,
+// separate from CanvasStoreDir and from MemoryDBPath's "Memorias de la IA").
+func SessionRecallStoreDir() (string, error) {
+	dir, err := AppSupportDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "session_recall"), nil
+}
+
 func EnvFilePath() (string, error) {
 	dir, err := AppSupportDir()
 	if err != nil {
